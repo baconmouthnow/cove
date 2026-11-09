@@ -102,21 +102,26 @@ describe("Stash exclude pattern notice", () => {
     cleanup();
   });
 
-  it("lists each pattern the import could not copy, with its Stash lists and reason", () => {
+  it("lists each pattern the import could not copy, with what Stash skipped and why", () => {
     render(
       createElement(StashExcludePatternNotice, {
         patterns: [
-          { pattern: "\\.tmp$", stashLists: ["exclude", "image_exclude"], reason: "Uses regular expression syntax." },
-          { pattern: "^/data/Clips/", stashLists: ["exclude"], reason: "Only in Stash's exclude list." },
+          { pattern: "\\.tmp$", stashLists: ["exclude", "image_exclude"], reason: "This is a regex." },
+          { pattern: "^/data/Clips/", stashLists: ["exclude"], reason: "Videos only." },
+          { pattern: "/20(19|20)/", stashLists: ["image_exclude"], reason: "Also a regex." },
         ],
       }),
     );
 
     expect(screen.getByText("\\.tmp$")).toBeInTheDocument();
-    expect(screen.getByText("(exclude, image_exclude)")).toBeInTheDocument();
-    expect(screen.getByText("Uses regular expression syntax.")).toBeInTheDocument();
+    expect(screen.getByText("(Stash skipped videos, images and galleries)")).toBeInTheDocument();
+    expect(screen.getByText("This is a regex.")).toBeInTheDocument();
     expect(screen.getByText("^/data/Clips/")).toBeInTheDocument();
-    expect(screen.getByText("Only in Stash's exclude list.")).toBeInTheDocument();
+    expect(screen.getByText("(Stash skipped videos)")).toBeInTheDocument();
+    expect(screen.getByText("Videos only.")).toBeInTheDocument();
+    expect(screen.getByText("/20(19|20)/")).toBeInTheDocument();
+    expect(screen.getByText("(Stash skipped images and galleries)")).toBeInTheDocument();
+    expect(screen.getByText("Also a regex.")).toBeInTheDocument();
   });
 
   it("shows nothing when every pattern was copied", () => {

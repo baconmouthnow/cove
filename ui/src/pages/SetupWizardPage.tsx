@@ -1315,16 +1315,18 @@ export function StashExcludePatternNotice({ patterns }: { patterns: StashExclude
     <div className="mt-4 max-w-lg mx-auto flex items-start gap-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-left text-sm text-amber-300">
       <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
       <div>
-        <div className="font-medium">Add these Stash exclusions before you scan</div>
+        <div className="font-medium">Some Stash exclusions didn't carry over</div>
         <div className="text-xs text-amber-300/80">
-          Cove couldn't copy these patterns from Stash. Until you add Cove patterns for them in Settings → Library →
-          Scanning & Assets → Scan Rules, a scan adds the files Stash skipped.
+          Stash uses regular expressions, but Cove only takes plain text or glob patterns, like{" "}
+          <code className="text-amber-200">Extras/**</code> or <code className="text-amber-200">*.tmp</code>. Rewrite
+          each one as a glob in Settings → Library → Scanning & Assets → Scan Rules before you scan. If you don't, the
+          scan will add the files Stash was skipping.
         </div>
         <ul className="mt-2 space-y-1.5 text-xs">
           {patterns.map((item) => (
             <li key={item.pattern}>
               <code className="break-all text-amber-200">{item.pattern}</code>{" "}
-              <span className="text-amber-300/70">({item.stashLists.join(", ")})</span>
+              <span className="text-amber-300/70">(Stash skipped {stashSkippedMedia(item.stashLists)})</span>
               <div className="text-amber-300/80">{item.reason}</div>
             </li>
           ))}
@@ -1332,6 +1334,14 @@ export function StashExcludePatternNotice({ patterns }: { patterns: StashExclude
       </div>
     </div>
   );
+}
+
+// Stash's `exclude` list skips videos, and its `image_exclude` list skips images and zip galleries.
+function stashSkippedMedia(stashLists: string[]): string {
+  const videos = stashLists.includes("exclude");
+  const images = stashLists.includes("image_exclude");
+  if (videos && images) return "videos, images and galleries";
+  return videos ? "videos" : "images and galleries";
 }
 
 type ProgressSample = { time: number; progress: number };

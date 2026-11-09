@@ -1167,11 +1167,11 @@ WHERE files.zip_file_id IS NOT NULL";
     private const string StashImageExcludeList = "image_exclude";
     private const string RegexMetacharacters = ".^$*+?()[]{}|";
 
-    // Why a Stash exclude pattern was not copied, as the setup wizard shows it.
-    private const string RegexReason = "Uses regular expression syntax, which Cove patterns don't support.";
-    private const string GlobCharactersReason = "Contains * or ?, which Cove would read as a glob.";
-    private const string OutsideLibraryReason = "Matches from the start of a path, but not from one of Stash's library folders.";
-    private const string VideosOnlyReason = "Only in Stash's exclude list, which skips videos. Cove has no pattern list for videos alone.";
+    // Why a Stash exclude pattern was not copied, as the setup wizard shows it under the pattern.
+    private const string RegexReason = "This is a regex. Write it as a glob instead.";
+    private const string GlobCharactersReason = "This looks for a real * or ? in a name, but Cove reads those as wildcards, so a glob can't match it exactly.";
+    private const string OutsideLibraryReason = "This starts with ^ but not with one of your Stash library paths, so Cove can't tell which folder it means. Write it as a glob instead.";
+    private const string VideosOnlyReason = "Cove's patterns skip every file type. To skip only videos, end the glob with a video extension, like Clips/**/*.mp4.";
 
     /// <summary>
     /// Reads one Stash exclude regex as a Cove pattern. Stash looks for each regex anywhere in a file's path and
