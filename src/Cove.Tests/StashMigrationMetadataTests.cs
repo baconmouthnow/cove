@@ -2104,7 +2104,7 @@ INSERT INTO image_files (file_id, format, width, height) VALUES (1, 'jpeg', 800,
             NullJobProgress.Instance,
             0d,
             1d,
-            CancellationToken.None));
+            ct));
         await InvokePrivateAsync(service, "ImportImagesAsync", stash, folderIdMap,
             new Dictionary<int, int>(), new Dictionary<int, int>(), new Dictionary<int, int>(),
             NullJobProgress.Instance, 0d, 1d, ct);
