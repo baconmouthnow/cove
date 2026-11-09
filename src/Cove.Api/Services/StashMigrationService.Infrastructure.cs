@@ -563,8 +563,11 @@ WHERE files.zip_file_id IS NOT NULL";
             else if (images)
                 added += AddPattern(imagePatterns, group.Key) + AddPattern(galleryPatterns, group.Key);
             else
-                unconverted.Add(new StashExcludePatternReport(group.First().Regex, [StashVideoExcludeList],
-                    "Only in Stash's exclude list, which skips videos. Cove has no pattern list for videos alone."));
+            {
+                unconverted.AddRange(group.Select(pattern => pattern.Regex).Distinct(StringComparer.Ordinal).Select(regex =>
+                    new StashExcludePatternReport(regex, [StashVideoExcludeList],
+                        "Only in Stash's exclude list, which skips videos. Cove has no pattern list for videos alone.")));
+            }
         }
 
         var reports = unconverted

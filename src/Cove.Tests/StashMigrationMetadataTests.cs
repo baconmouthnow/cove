@@ -1037,6 +1037,7 @@ exclude:
   - sample
   - '\.tmp$'
   - ^{library}/Clips/
+  - ^{library}/CLIPS/
 # A comment between items, as in a config.yml edited by hand.
   - {library}/Unanchored/
   - ^/elsewhere/
@@ -1064,7 +1065,7 @@ image_exclude:
             Assert.Equal(["/media/Scans/", "/media/Old.Sets/"], config.ExcludeGalleryPatterns);
             var unconverted = Assert.IsAssignableFrom<IReadOnlyList<StashExcludePatternReport>>(result);
             Assert.Equal(
-                new[] { (@"\.tmp$", "exclude"), ($"^{library}/Clips/", "exclude"), ("^/elsewhere/", "exclude"), ("^Relative/", "image_exclude") },
+                new[] { (@"\.tmp$", "exclude"), ($"^{library}/Clips/", "exclude"), ($"^{library}/CLIPS/", "exclude"), ("^/elsewhere/", "exclude"), ("^Relative/", "image_exclude") },
                 unconverted.Select(pattern => (pattern.Pattern, string.Join(", ", pattern.StashLists))));
             Assert.All(unconverted, pattern => Assert.False(string.IsNullOrWhiteSpace(pattern.Reason)));
         }
