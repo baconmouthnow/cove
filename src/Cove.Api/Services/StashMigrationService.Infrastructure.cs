@@ -565,8 +565,7 @@ WHERE files.zip_file_id IS NOT NULL";
             else
             {
                 unconverted.AddRange(group.Select(pattern => pattern.Regex).Distinct(StringComparer.Ordinal).Select(regex =>
-                    new StashExcludePatternReport(regex, [StashVideoExcludeList],
-                        "Only in Stash's exclude list, which skips videos. Cove has no pattern list for videos alone.")));
+                    new StashExcludePatternReport(regex, [StashVideoExcludeList], VideosOnlyReason)));
             }
         }
 
@@ -1168,6 +1167,12 @@ WHERE files.zip_file_id IS NOT NULL";
     private const string StashImageExcludeList = "image_exclude";
     private const string RegexMetacharacters = ".^$*+?()[]{}|";
 
+    // Why a Stash exclude pattern was not copied, as the setup wizard shows it.
+    private const string RegexReason = "Uses regular expression syntax, which Cove patterns don't support.";
+    private const string GlobCharactersReason = "Contains * or ?, which Cove would read as a glob.";
+    private const string OutsideLibraryReason = "Matches from the start of a path, but not from one of Stash's library folders.";
+    private const string VideosOnlyReason = "Only in Stash's exclude list, which skips videos. Cove has no pattern list for videos alone.";
+
     /// <summary>
     /// Reads one Stash exclude regex as a Cove pattern. Stash looks for each regex anywhere in a file's path and
     /// ignores case, which is how Cove matches a pattern with no <c>*</c> or <c>?</c>, so a regex that is plain text
@@ -1179,13 +1184,13 @@ WHERE files.zip_file_id IS NOT NULL";
     private static StashExcludePattern ReadStashExcludePattern(string regex, string stashList, IReadOnlyList<string> libraryPaths)
     {
         if (!TryReadRegexAsText(regex, out var text, out var anchored))
-            return new(regex, stashList, null, false, "Uses regular expression syntax, which Cove patterns don't support.");
+            return new(regex, stashList, null, false, RegexReason);
         if (text.Contains('*') || text.Contains('?'))
-            return new(regex, stashList, null, false, "Contains * or ?, which Cove would read as a glob.");
+            return new(regex, stashList, null, false, GlobCharactersReason);
         var pattern = NormalizeImportedPath(text);
         var isLibraryPath = libraryPaths.Any(library => IsWithinStashFolder(pattern, NormalizeImportedPath(library)));
         if (anchored && !isLibraryPath)
-            return new(regex, stashList, null, false, "Matches from the start of a path, but not from one of Stash's library folders.");
+            return new(regex, stashList, null, false, OutsideLibraryReason);
         return new(regex, stashList, pattern, isLibraryPath, null);
     }
 
