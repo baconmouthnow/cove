@@ -248,7 +248,17 @@ public partial class StashMigrationService
             GeneratedPath = ApplyStashPathMappings(stashConfig.GeneratedPath, pathMappings),
             BlobFilesPath = ApplyStashPathMappings(stashConfig.BlobFilesPath, pathMappings),
             CustomPerformerImageLocation = ApplyStashPathMappings(stashConfig.CustomPerformerImageLocation, pathMappings),
+            ExcludePatterns = stashConfig.ExcludePatterns
+                .Select(pattern => pattern.IsLibraryPath ? pattern with { CovePattern = ApplyStashPathMappingsToFolderPath(pattern.CovePattern!, pathMappings) } : pattern)
+                .ToList(),
         };
+    }
+
+    // Keeps the trailing separator that makes a folder path stop at the folder's own name.
+    private static string ApplyStashPathMappingsToFolderPath(string folderPath, IReadOnlyList<StashPathMapping> pathMappings)
+    {
+        var mapped = ApplyStashPathMappings(folderPath, pathMappings) ?? folderPath;
+        return folderPath.EndsWith('/') && !mapped.EndsWith('/') ? mapped + "/" : mapped;
     }
 
     private static string? ApplyStashPathMappings(string? path, IReadOnlyList<StashPathMapping> pathMappings)

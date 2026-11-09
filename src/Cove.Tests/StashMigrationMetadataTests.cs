@@ -982,6 +982,63 @@ stash_boxes:
     }
 
     [Fact]
+    public async Task ImportStashConfig_CopiesExcludePatternsCoveMatchesExactlyAndReportsTheRest()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"stash-config-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+        var configPath = Path.Combine(tempDir, "config.yml");
+
+        try
+        {
+            // Stash's own paths, resolved the way the importer resolves them on this host.
+            var library = Path.GetFullPath("/stash/library").Replace('\\', '/');
+            await File.WriteAllTextAsync(configPath, $"""
+stash:
+  - path: {library}
+exclude:
+  - "^{library}/Extras/"
+  - sample
+  - '\.tmp$'
+  - ^{library}/Clips/
+  - ^{library}/CLIPS/
+# A comment between items, as in a config.yml edited by hand.
+  - {library}/Unanchored/
+  - ^/elsewhere/
+image_exclude:
+- ^{library}/Extras/.*
+- SAMPLE
+- {library}/Unanchored/
+- ^{library}/Scans/
+- "(?i)^{library}/Old\\.Sets/"
+- ^Relative/
+""", TestContext.Current.CancellationToken);
+            await using var context = CreateContext();
+            var config = new CoveConfiguration();
+            var service = CreateService(context, configuration: config, configPath: Path.Combine(tempDir, "cove-config.json"));
+            var mappings = InvokePrivateStatic(typeof(StashMigrationService), "NormalizeStashPathMappings",
+                (object)new StashPathMapping[] { new(library, "/media") });
+            var stashConfig = InvokePrivateStatic(typeof(StashMigrationService), "ApplyStashConfigPathMappings",
+                InvokePrivateStatic(typeof(StashMigrationService), "ParseStashConfig", configPath), mappings);
+
+            var result = await InvokePrivateAsync(service, "ImportStashConfigAsync", stashConfig, TestContext.Current.CancellationToken);
+            await InvokePrivateAsync(service, "ImportStashConfigAsync", stashConfig, TestContext.Current.CancellationToken);
+
+            Assert.Equal(["/media/Extras/", "sample", "/media/Unanchored/"], config.ExcludePatterns);
+            Assert.Equal(["/media/Scans/", "/media/Old.Sets/"], config.ExcludeImagePatterns);
+            Assert.Equal(["/media/Scans/", "/media/Old.Sets/"], config.ExcludeGalleryPatterns);
+            var unconverted = Assert.IsAssignableFrom<IReadOnlyList<StashExcludePatternReport>>(result);
+            Assert.Equal(
+                new[] { (@"\.tmp$", "exclude"), ($"^{library}/Clips/", "exclude"), ($"^{library}/CLIPS/", "exclude"), ("^/elsewhere/", "exclude"), ("^Relative/", "image_exclude") },
+                unconverted.Select(pattern => (pattern.Pattern, string.Join(", ", pattern.StashLists))));
+            Assert.All(unconverted, pattern => Assert.False(string.IsNullOrWhiteSpace(pattern.Reason)));
+        }
+        finally
+        {
+            TryDeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void ParseStashConfig_ReadsCamelCaseMetadataServerApiKey()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"stash-config-{Guid.NewGuid():N}");
@@ -2639,10 +2696,13 @@ INSERT INTO files_fingerprints SELECT id,'md5','fingerprint-'||id FROM scenes;
     private static StashMigrationService CreateService(
         CoveContext context,
         IBlobService? blobService = null,
-        CoveConfiguration? configuration = null)
+        CoveConfiguration? configuration = null,
+        string? configPath = null)
     {
         var config = configuration ?? new CoveConfiguration();
-        var configService = new ConfigService(config, NullLogger<ConfigService>.Instance);
+        var configService = configPath is null
+            ? new ConfigService(config, NullLogger<ConfigService>.Instance)
+            : new ConfigService(config, NullLogger<ConfigService>.Instance, configPath);
         var scopeFactory = new ServiceCollection().BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
         return new StashMigrationService(
             context,
