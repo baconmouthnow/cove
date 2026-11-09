@@ -2401,6 +2401,12 @@ export interface StashImportResult {
   groups: number;
   images: number;
   galleries: number;
+  unconvertedExcludePatterns?: StashExcludePatternReport[];
+}
+export interface StashExcludePatternReport {
+  pattern: string;
+  stashLists: string[];
+  reason: string;
 }
 export interface StashPathMapping {
   source: string;
