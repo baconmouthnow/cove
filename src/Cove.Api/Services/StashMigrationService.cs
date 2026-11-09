@@ -118,10 +118,10 @@ public partial class StashMigrationService
     /// <summary>
     /// One entry of Stash's <c>exclude</c> list (videos) or <c>image_exclude</c> list (images and galleries).
     /// <see cref="CovePattern"/> is the Cove pattern that matches the same paths, or null when there is none and
-    /// <see cref="Reason"/> says why. <see cref="IsPathPrefix"/> marks a pattern that is the start of a Stash path,
-    /// which the import's path mappings rewrite like the library paths.
+    /// <see cref="Reason"/> says why. <see cref="IsLibraryPath"/> marks a pattern that is a path inside one of Stash's
+    /// library folders, which the import's path mappings rewrite like the library paths.
     /// </summary>
-    private sealed record StashExcludePattern(string Regex, string StashList, string? CovePattern, bool IsPathPrefix, string? Reason);
+    private sealed record StashExcludePattern(string Regex, string StashList, string? CovePattern, bool IsLibraryPath, string? Reason);
 
     private static readonly object ImportSync = new();
     private static readonly Queue<string> importResultOrder = new();

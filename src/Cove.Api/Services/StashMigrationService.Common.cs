@@ -249,16 +249,16 @@ public partial class StashMigrationService
             BlobFilesPath = ApplyStashPathMappings(stashConfig.BlobFilesPath, pathMappings),
             CustomPerformerImageLocation = ApplyStashPathMappings(stashConfig.CustomPerformerImageLocation, pathMappings),
             ExcludePatterns = stashConfig.ExcludePatterns
-                .Select(pattern => pattern.IsPathPrefix ? pattern with { CovePattern = ApplyStashPathMappingsToFolderPrefix(pattern.CovePattern!, pathMappings) } : pattern)
+                .Select(pattern => pattern.IsLibraryPath ? pattern with { CovePattern = ApplyStashPathMappingsToFolderPath(pattern.CovePattern!, pathMappings) } : pattern)
                 .ToList(),
         };
     }
 
-    // Keeps the trailing separator that makes a folder prefix stop at the folder's own name.
-    private static string ApplyStashPathMappingsToFolderPrefix(string prefix, IReadOnlyList<StashPathMapping> pathMappings)
+    // Keeps the trailing separator that makes a folder path stop at the folder's own name.
+    private static string ApplyStashPathMappingsToFolderPath(string folderPath, IReadOnlyList<StashPathMapping> pathMappings)
     {
-        var mapped = ApplyStashPathMappings(prefix, pathMappings) ?? prefix;
-        return prefix.EndsWith('/') && !mapped.EndsWith('/') ? mapped + "/" : mapped;
+        var mapped = ApplyStashPathMappings(folderPath, pathMappings) ?? folderPath;
+        return folderPath.EndsWith('/') && !mapped.EndsWith('/') ? mapped + "/" : mapped;
     }
 
     private static string? ApplyStashPathMappings(string? path, IReadOnlyList<StashPathMapping> pathMappings)
