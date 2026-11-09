@@ -1000,6 +1000,7 @@ exclude:
   - sample
   - '\.tmp$'
   - ^{library}/Clips/
+# A comment between items, as in a config.yml edited by hand.
   - {library}/Unanchored/
   - ^/elsewhere/
 image_exclude:

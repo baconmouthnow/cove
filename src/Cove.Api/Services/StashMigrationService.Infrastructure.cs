@@ -933,6 +933,9 @@ WHERE files.zip_file_id IS NOT NULL";
                 if (currentExcludeList != null)
                 {
                     var item = rawLine.TrimStart();
+                    // A comment, even at the start of a line, doesn't end the list.
+                    if (item.StartsWith('#'))
+                        continue;
                     if (item.StartsWith('-'))
                     {
                         var regex = ReadYamlScalar(item[1..]);
