@@ -990,36 +990,43 @@ stash_boxes:
 
         try
         {
-            await File.WriteAllTextAsync(configPath, """
+            // Stash's own paths, resolved the way the importer resolves them on this host.
+            var library = Path.GetFullPath("/stash/library").Replace('\\', '/');
+            await File.WriteAllTextAsync(configPath, $"""
+stash:
+  - path: {library}
 exclude:
-  - "^/stash/library/Extras/"
+  - "^{library}/Extras/"
   - sample
   - '\.tmp$'
-  - ^/stash/library/Clips/
+  - ^{library}/Clips/
+  - {library}/Unanchored/
+  - ^/elsewhere/
 image_exclude:
-- ^/stash/library/Extras/.*
+- ^{library}/Extras/.*
 - SAMPLE
-- ^/stash/library/Scans/
-- "(?i)^/stash/library/Old\\.Sets/"
+- {library}/Unanchored/
+- ^{library}/Scans/
+- "(?i)^{library}/Old\\.Sets/"
 - ^Relative/
 """, TestContext.Current.CancellationToken);
             await using var context = CreateContext();
             var config = new CoveConfiguration();
             var service = CreateService(context, configuration: config, configPath: Path.Combine(tempDir, "cove-config.json"));
             var mappings = InvokePrivateStatic(typeof(StashMigrationService), "NormalizeStashPathMappings",
-                (object)new StashPathMapping[] { new("/stash/library", "/media") });
+                (object)new StashPathMapping[] { new(library, "/media") });
             var stashConfig = InvokePrivateStatic(typeof(StashMigrationService), "ApplyStashConfigPathMappings",
                 InvokePrivateStatic(typeof(StashMigrationService), "ParseStashConfig", configPath), mappings);
 
             var result = await InvokePrivateAsync(service, "ImportStashConfigAsync", stashConfig, TestContext.Current.CancellationToken);
             await InvokePrivateAsync(service, "ImportStashConfigAsync", stashConfig, TestContext.Current.CancellationToken);
 
-            Assert.Equal(["/media/Extras/", "sample"], config.ExcludePatterns);
+            Assert.Equal(["/media/Extras/", "sample", "/media/Unanchored/"], config.ExcludePatterns);
             Assert.Equal(["/media/Scans/", "/media/Old.Sets/"], config.ExcludeImagePatterns);
             Assert.Equal(["/media/Scans/", "/media/Old.Sets/"], config.ExcludeGalleryPatterns);
             var unconverted = Assert.IsAssignableFrom<IReadOnlyList<StashExcludePatternReport>>(result);
             Assert.Equal(
-                new[] { (@"\.tmp$", "exclude"), ("^/stash/library/Clips/", "exclude"), ("^Relative/", "image_exclude") },
+                new[] { (@"\.tmp$", "exclude"), ($"^{library}/Clips/", "exclude"), ("^/elsewhere/", "exclude"), ("^Relative/", "image_exclude") },
                 unconverted.Select(pattern => (pattern.Pattern, string.Join(", ", pattern.StashLists))));
             Assert.All(unconverted, pattern => Assert.False(string.IsNullOrWhiteSpace(pattern.Reason)));
         }
