@@ -75,8 +75,8 @@ public class CleanService(
                         logger.LogInformation("Dry run: Clean would remove the record of excluded file {Path}; the file stays on disk", path);
                 logger.LogInformation("Dry run - no changes made");
                 progress.SetSummary(removeExcluded
-                    ? $"Dry run found {missing} missing files, {excluded} excluded files and {orphans} orphaned items; nothing was removed"
-                    : $"Dry run found {missing} missing files and {orphans} orphaned items; nothing was removed");
+                    ? $"Dry run found {Count(missing, "missing file")}, {Count(excluded, "excluded file")} and {Count(orphans, "orphaned item")}. Nothing was removed."
+                    : $"Dry run found {Count(missing, "missing file")} and {Count(orphans, "orphaned item")}. Nothing was removed.");
                 return;
             }
 
@@ -281,4 +281,6 @@ public class CleanService(
             if (ids.Length > 0) deleted += await query.Where(file => ids.Contains(file.Id)).ExecuteDeleteAsync(ct);
         }
     }
+
+    private static string Count(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
 }
