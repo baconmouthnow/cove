@@ -13,6 +13,9 @@ public class CleanService(
     CoveConfiguration config,
     ILogger<CleanService> logger) : ICleanService
 {
+    // Kinds of file rows the plan collects for pruning: files gone from disk, and files the exclusions cover.
+    private const string MissingFilesKind = "files";
+    private const string ExcludedFilesKind = "excluded-files";
     private sealed record CleanFileInfo(int Id, string Path, int? ZipFileId);
     private sealed record CleanFolderInfo(string Path, int? ZipFileId);
     private sealed class CleanEntity
@@ -53,8 +56,8 @@ public class CleanService(
                     Files = gallery.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList(),
                     Folder = gallery.Folder == null ? null : new CleanFolderInfo(gallery.Folder.Path, gallery.Folder.ZipFileId) }), scopedPaths, exclusions, progress, ct);
 
-            var missing = await plan.CountAsync("files", ct);
-            var excluded = await plan.CountAsync("excluded-files", ct);
+            var missing = await plan.CountAsync(MissingFilesKind, ct);
+            var excluded = await plan.CountAsync(ExcludedFilesKind, ct);
             var videos = await plan.CountAsync("video", ct);
             var images = await plan.CountAsync("image", ct);
             var galleries = await plan.CountAsync("gallery", ct);
@@ -66,7 +69,7 @@ public class CleanService(
             if (dryRun)
             {
                 // Name each excluded file, so the user can check what the exclusions cover before a real clean.
-                await foreach (var ids in plan.ReadAsync("excluded-files", ct))
+                await foreach (var ids in plan.ReadAsync(ExcludedFilesKind, ct))
                     foreach (var path in await db.Set<BaseFileEntity>().AsNoTracking().Where(file => ids.Contains(file.Id))
                         .OrderBy(file => file.Id).Select(file => file.Path).ToListAsync(ct))
                         logger.LogInformation("Dry run: Clean would remove the record of excluded file {Path}; the file stays on disk", path);
@@ -93,7 +96,7 @@ public class CleanService(
             // entities. Shot boundaries of pruned files go with them: a file that vanished from disk may have
             // been replaced or lost, and nothing here can tell which.
             var pruned = 0;
-            foreach (var files in new[] { "files", "excluded-files" })
+            foreach (var files in new[] { MissingFilesKind, ExcludedFilesKind })
                 await foreach (var ids in plan.ReadAsync(files, ct))
                     pruned += await db.Set<BaseFileEntity>().Where(file => ids.Contains(file.Id)).ExecuteDeleteAsync(ct);
 
@@ -191,8 +194,8 @@ public class CleanService(
                 if (orphan) orphans.Add(entity.Id);
                 else if (removedIds.Count > 0 && kind is "audio" or "text") refresh.Add(entity.Id);
             }
-            await plan.AddAsync("files", missingFiles, ct);
-            await plan.AddAsync("excluded-files", excludedFiles, ct);
+            await plan.AddAsync(MissingFilesKind, missingFiles, ct);
+            await plan.AddAsync(ExcludedFilesKind, excludedFiles, ct);
             await plan.AddAsync(kind, orphans, ct);
             if (refresh.Count > 0) await plan.AddAsync($"refresh-{kind}", refresh, ct);
             checkedCount += batch.Count;
@@ -242,8 +245,8 @@ public class CleanService(
                     using var lookupScope = scopeFactory.CreateScope();
                     var lookupDb = lookupScope.ServiceProvider.GetRequiredService<CoveContext>();
                     var ownedFileIds = await OwnedFileIds(lookupDb, entityKind, id).ToListAsync(ct);
-                    await plan.RemoveAsync("files", ownedFileIds, ct);
-                    await plan.RemoveAsync("excluded-files", ownedFileIds, ct);
+                    await plan.RemoveAsync(MissingFilesKind, ownedFileIds, ct);
+                    await plan.RemoveAsync(ExcludedFilesKind, ownedFileIds, ct);
                 }
                 removal.Processed++;
                 progress.Report((double)removal.Processed / Math.Max(removal.Total, 1),
