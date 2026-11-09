@@ -218,8 +218,8 @@ public partial class StashMigrationService
             if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(target))
                 throw new ArgumentException("Each Stash path mapping requires both a source path and a target path.");
 
-            source = NormalizeMappedPath(source);
-            target = NormalizeMappedPath(target);
+            source = NormalizePathForMapping(source);
+            target = NormalizePathForMapping(target);
             if (!string.Equals(source, target, StringComparison.OrdinalIgnoreCase))
                 normalized.Add(new StashPathMapping(source, target));
         }
@@ -230,7 +230,7 @@ public partial class StashMigrationService
     }
 
     // Trims no whitespace, because folder and file names may end in a space or a no-break space.
-    private static string NormalizeMappedPath(string path)
+    private static string NormalizePathForMapping(string path)
     {
         var normalized = NormalizeImportedPath(path);
         return normalized == "/" ? normalized : normalized.TrimEnd('/');
@@ -257,7 +257,7 @@ public partial class StashMigrationService
         if (string.IsNullOrWhiteSpace(path) || pathMappings.Count == 0)
             return path;
 
-        var normalizedPath = NormalizeMappedPath(path);
+        var normalizedPath = NormalizePathForMapping(path);
         foreach (var mapping in pathMappings)
         {
             if (string.Equals(normalizedPath, mapping.Source, StringComparison.OrdinalIgnoreCase))
