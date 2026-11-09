@@ -2706,6 +2706,11 @@ public record CleanOptionsDto
 {
     public List<string>? Paths { get; init; }
     public bool DryRun { get; init; }
+    /// <summary>
+    /// Also remove the records of files the scan exclusions cover, and media left with no file. The files
+    /// stay on disk.
+    /// </summary>
+    public bool RemoveExcluded { get; init; }
 }
 
 public record ExportOptionsDto

@@ -22,7 +22,7 @@ public class MetadataController(
     IScanService scanService,
     IJobService jobService,
     GenerateJobService generateJobService,
-    ICleanService cleanService,
+    CleanService cleanService,
     IServiceScopeFactory scopeFactory,
     IHttpClientFactory httpClientFactory,
     CoveConfiguration config,
@@ -238,7 +238,7 @@ public class MetadataController(
         // removed" reports) while leaving orphaned parent entities that scan then skipped.
         // CleanService resolves each file's containing archive via ZipFileId, so zip contents are
         // only removed when the archive itself is gone.
-        var jobId = cleanService.StartClean(opts?.DryRun == true, opts?.Paths);
+        var jobId = cleanService.StartClean(opts?.DryRun == true, opts?.Paths, opts?.RemoveExcluded == true);
         return Ok(new { jobId });
     }
 

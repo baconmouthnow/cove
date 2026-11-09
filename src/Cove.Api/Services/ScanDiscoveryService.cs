@@ -618,7 +618,7 @@ internal sealed class ScanDiscoveryService(
         return result;
     }
 
-    private static bool IsExcludedByActiveIgnoreRules(
+    internal static bool IsExcludedByActiveIgnoreRules(
         string path,
         IReadOnlyList<ActiveIgnoreRuleSet> ruleSets,
         bool isDirectory = false)
@@ -682,7 +682,7 @@ internal sealed class ScanDiscoveryService(
         return ignored;
     }
 
-    private static List<IgnoreRule> GetIgnoreRules(
+    internal static List<IgnoreRule> GetIgnoreRules(
         string directory,
         Dictionary<string, List<IgnoreRule>> ruleCache)
     {
@@ -736,7 +736,7 @@ internal sealed class ScanDiscoveryService(
             || relativePath.Split('/').Any(segment => FileSystemName.MatchesSimpleExpression(normalizedPattern, segment, ignoreCase: true));
     }
 
-    private static List<ScanTarget> ResolveScanTargets(CoveConfiguration cfg, List<string>? selectedPaths)
+    internal static List<ScanTarget> ResolveScanTargets(CoveConfiguration cfg, List<string>? selectedPaths)
     {
         if (selectedPaths == null)
         {
