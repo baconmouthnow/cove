@@ -736,7 +736,7 @@ internal sealed class ScanDiscoveryService(
             || relativePath.Split('/').Any(segment => FileSystemName.MatchesSimpleExpression(normalizedPattern, segment, ignoreCase: true));
     }
 
-    private static List<ScanTarget> ResolveScanTargets(CoveConfiguration cfg, List<string>? selectedPaths)
+    internal static List<ScanTarget> ResolveScanTargets(CoveConfiguration cfg, List<string>? selectedPaths)
     {
         if (selectedPaths == null)
         {
