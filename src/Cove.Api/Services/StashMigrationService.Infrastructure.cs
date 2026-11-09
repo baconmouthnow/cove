@@ -875,7 +875,7 @@ WHERE files.zip_file_id IS NOT NULL";
     {
         var paths = new List<(string Path, bool ExcludeImage, bool ExcludeVideo)>();
         var metadataServers = new List<StashMetadataServerConfig>();
-        var excludePatterns = new List<StashExcludePattern>();
+        var excludeEntries = new List<(string Regex, string StashList)>();
         string? currentExcludeList = null;
         string? generatedPath = null;
         string? videoFileNamingAlgorithm = null;
@@ -938,7 +938,7 @@ WHERE files.zip_file_id IS NOT NULL";
                         var regex = ReadYamlScalar(item[1..]);
                         // Stash skips empty patterns too.
                         if (regex.Trim().Length > 0)
-                            excludePatterns.Add(ReadStashExcludePattern(regex, currentExcludeList));
+                            excludeEntries.Add((regex, currentExcludeList));
                         continue;
                     }
 
@@ -1134,16 +1134,19 @@ WHERE files.zip_file_id IS NOT NULL";
         var resolvedGeneratedPath = ResolveConfigDirDefault(
             ResolveStashConfigPath(configDirectory, generatedPath), configDirectory, "generated");
 
+        var libraryPaths = paths
+            .Select(path => (Path: ResolveStashConfigPath(configDirectory, path.Path) ?? path.Path, path.ExcludeImage, path.ExcludeVideo))
+            .ToList();
         return new StashConfigData(
-            paths
-                .Select(path => (ResolveStashConfigPath(configDirectory, path.Path) ?? path.Path, path.ExcludeImage, path.ExcludeVideo))
-                .ToList(),
+            libraryPaths,
             resolvedGeneratedPath,
             videoFileNamingAlgorithm ?? (calculateMd5 == true ? "MD5" : "OSHASH"),
             resolvedBlobFilesPath,
             ResolveStashConfigPath(configDirectory, customPerformerImageLocation),
             metadataServers,
-            excludePatterns);
+            excludeEntries
+                .Select(entry => ReadStashExcludePattern(entry.Regex, entry.StashList, [.. libraryPaths.Select(path => path.Path)]))
+                .ToList());
 
         static bool IsTopLevelSection(string rawLine, params string[] names)
         {
@@ -1162,21 +1165,29 @@ WHERE files.zip_file_id IS NOT NULL";
     /// <summary>
     /// Reads one Stash exclude regex as a Cove pattern. Stash looks for each regex anywhere in a file's path and
     /// ignores case, which is how Cove matches a pattern with no <c>*</c> or <c>?</c>, so a regex that is plain text
-    /// becomes that text. A regex anchored to a full folder path, such as <c>^/data/Games/</c>, becomes that folder
-    /// path: Cove finds it anywhere in a path, but a full folder path only occurs at the start of one. Any other
-    /// regex has no exact Cove pattern.
+    /// becomes that text. Text that is a path inside one of Stash's library folders is marked as a path, so the
+    /// import's path mappings rewrite it like the library paths. A regex anchored to such a path, such as
+    /// <c>^/data/Games/</c>, becomes that path too: Cove finds it anywhere in a path, and it matches the same files
+    /// unless the folder path appears again deeper inside one. Any other regex has no exact Cove pattern.
     /// </summary>
-    private static StashExcludePattern ReadStashExcludePattern(string regex, string stashList)
+    private static StashExcludePattern ReadStashExcludePattern(string regex, string stashList, IReadOnlyList<string> libraryPaths)
     {
         if (!TryReadRegexAsText(regex, out var text, out var anchored))
             return new(regex, stashList, null, false, "Uses regular expression syntax, which Cove patterns don't support.");
         if (text.Contains('*') || text.Contains('?'))
             return new(regex, stashList, null, false, "Contains * or ?, which Cove would read as a glob.");
-        if (!anchored)
-            return new(regex, stashList, NormalizeImportedPath(text), false, null);
-        if (!Path.IsPathRooted(text) && !IsWindowsAbsolutePath(text))
-            return new(regex, stashList, null, false, "Matches at the start of a path but doesn't start with a full folder path.");
-        return new(regex, stashList, NormalizeImportedPath(text), true, null);
+        var pattern = NormalizeImportedPath(text);
+        var isLibraryPath = libraryPaths.Any(library => IsWithinStashFolder(pattern, NormalizeImportedPath(library)));
+        if (anchored && !isLibraryPath)
+            return new(regex, stashList, null, false, "Matches from the start of a path, but not from one of Stash's library folders.");
+        return new(regex, stashList, pattern, isLibraryPath, null);
+    }
+
+    private static bool IsWithinStashFolder(string path, string folder)
+    {
+        var root = folder.TrimEnd('/');
+        return path.TrimEnd('/').Equals(root, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool TryReadRegexAsText(string regex, out string text, out bool anchored)
