@@ -1038,6 +1038,23 @@ stashBoxes:
     }
 
     [Fact]
+    public void ApplyStashPathMappings_TrimsTheMappingButNotThePath()
+    {
+        var mappings = Assert.IsAssignableFrom<IReadOnlyList<StashPathMapping>>(InvokePrivateStatic(
+            typeof(StashMigrationService),
+            "NormalizeStashPathMappings",
+            (object)new StashPathMapping[] { new(" /data/ ", "\u00a0/media ") }));
+
+        var mappedPath = Assert.IsType<string>(InvokePrivateStatic(
+            typeof(StashMigrationService),
+            "ApplyStashPathMappings",
+            "/data/sets/Holiday photos\u00a0",
+            mappings));
+
+        Assert.Equal("/media/sets/Holiday photos\u00a0", mappedPath);
+    }
+
+    [Fact]
     public void ApplyStashConfigPathMappings_MapsWindowsGeneratedPathOnDockerHost()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"stash-config-{Guid.NewGuid():N}");
