@@ -9,6 +9,7 @@ import {
   resolveOwnerNextStep,
   resolveStashSetupEntryStep,
   SetupImportProgressCard,
+  StashExcludePatternNotice,
 } from "../pages/SetupWizardPage";
 
 describe("Stash setup owner gate", () => {
@@ -93,5 +94,34 @@ describe("setup import progress card", () => {
 
     expect(screen.getByText("Import from Stash")).toBeInTheDocument();
     expect(screen.getByText("~16s remaining")).toBeInTheDocument();
+  });
+});
+
+describe("Stash exclude pattern notice", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("lists each pattern the import could not copy, with its Stash lists and reason", () => {
+    render(
+      createElement(StashExcludePatternNotice, {
+        patterns: [
+          { pattern: "\\.tmp$", stashLists: ["exclude", "image_exclude"], reason: "Uses regular expression syntax." },
+          { pattern: "^/data/Clips/", stashLists: ["exclude"], reason: "Only in Stash's exclude list." },
+        ],
+      }),
+    );
+
+    expect(screen.getByText("\\.tmp$")).toBeInTheDocument();
+    expect(screen.getByText("(exclude, image_exclude)")).toBeInTheDocument();
+    expect(screen.getByText("Uses regular expression syntax.")).toBeInTheDocument();
+    expect(screen.getByText("^/data/Clips/")).toBeInTheDocument();
+    expect(screen.getByText("Only in Stash's exclude list.")).toBeInTheDocument();
+  });
+
+  it("shows nothing when every pattern was copied", () => {
+    const { container } = render(createElement(StashExcludePatternNotice, { patterns: [] }));
+
+    expect(container).toBeEmptyDOMElement();
   });
 });

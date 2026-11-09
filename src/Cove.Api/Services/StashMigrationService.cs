@@ -23,7 +23,16 @@ namespace Cove.Api.Services;
 // screenshots, vtt) was located via config.yml so the preview can tell the user up front that generated
 // content will be migratable. GeneratedPath is the resolved path when known (even if the folder is missing).
 public record StashPreviewResult(bool IsValid, string? Error, int Videos, int Performers, int Tags, int Studios, int Groups, int Images, int Galleries, bool GeneratedContentFound = false, string? GeneratedPath = null);
-public record StashImportResult(int Videos, int Performers, int Tags, int Studios, int Groups, int Images, int Galleries);
+public record StashImportResult(int Videos, int Performers, int Tags, int Studios, int Groups, int Images, int Galleries)
+{
+    /// <summary>
+    /// Patterns from Stash's <c>exclude</c> and <c>image_exclude</c> lists that Cove has no exact pattern for. Cove
+    /// adds the files they cover on its first scan unless the user adds Cove patterns for them first.
+    /// </summary>
+    public IReadOnlyList<StashExcludePatternReport> UnconvertedExcludePatterns { get; init; } = [];
+}
+/// <summary>A Stash exclude pattern the import did not copy: the regex, the Stash lists it is in, and why.</summary>
+public record StashExcludePatternReport(string Pattern, IReadOnlyList<string> StashLists, string Reason);
 public record StashPathMapping(string Source, string Target);
 public record StashImportOptions(string? CoveGeneratedPath, bool MigrateGeneratedContent = true, IReadOnlyList<StashPathMapping>? PathMappings = null);
 
@@ -104,7 +113,15 @@ public partial class StashMigrationService
         string VideoFileNamingAlgorithm,
         string? BlobFilesPath,
         string? CustomPerformerImageLocation,
-        List<StashMetadataServerConfig> MetadataServers);
+        List<StashMetadataServerConfig> MetadataServers,
+        List<StashExcludePattern> ExcludePatterns);
+    /// <summary>
+    /// One entry of Stash's <c>exclude</c> list (videos) or <c>image_exclude</c> list (images and galleries).
+    /// <see cref="CovePattern"/> is the Cove pattern that matches the same paths, or null when there is none and
+    /// <see cref="Reason"/> says why. <see cref="IsPathPrefix"/> marks a pattern that is the start of a Stash path,
+    /// which the import's path mappings rewrite like the library paths.
+    /// </summary>
+    private sealed record StashExcludePattern(string Regex, string StashList, string? CovePattern, bool IsPathPrefix, string? Reason);
 
     private static readonly object ImportSync = new();
     private static readonly Queue<string> importResultOrder = new();
@@ -536,7 +553,7 @@ public partial class StashMigrationService
         var configPath = Path.Combine(configDir, "config.yml");
         var stashConfig = File.Exists(configPath)
             ? ParseStashConfig(configPath)
-            : new StashConfigData([], null, "OSHASH", null, null, []);
+            : new StashConfigData([], null, "OSHASH", null, null, [], []);
         stashConfig = ApplyStashConfigPathMappings(stashConfig, options.PathMappings ?? []);
 
         _currentImportCustomPerformerImageLocation = stashConfig.CustomPerformerImageLocation;
@@ -650,13 +667,14 @@ public partial class StashMigrationService
                 () => ReconcileImportedZipLinksAsync(conn, folderIdMap, imageIdMap, galleryFileIdMap, ct));
             _db.ChangeTracker.Clear();
 
+            IReadOnlyList<StashExcludePatternReport> unconvertedExcludePatterns = [];
             await RunMigrationPhaseAsync(
                 "stash config",
                 sw,
                 async () =>
                 {
                     progress.Report(LibraryPathsStart, "Importing Stash config...");
-                    await ImportStashConfigAsync(stashConfig, ct);
+                    unconvertedExcludePatterns = await ImportStashConfigAsync(stashConfig, ct);
                     progress.Report(LibraryPathsEnd, "Stash config imported");
                 });
 
@@ -690,7 +708,10 @@ public partial class StashMigrationService
             _logger.LogInformation("Migration complete in {Elapsed}: {S} scenes, {P} performers, {T} tags, {St} studios, {G} groups, {I} images, {Ga} galleries",
                 sw.Elapsed, sceneCount, performerIdMap.Count, tagIdMap.Count, studioIdMap.Count, groupIdMap.Count, imageIdMap.Count, galleryCount);
 
-            return new StashImportResult(sceneCount, performerIdMap.Count, tagIdMap.Count, studioIdMap.Count, groupIdMap.Count, imageIdMap.Count, galleryCount);
+            return new StashImportResult(sceneCount, performerIdMap.Count, tagIdMap.Count, studioIdMap.Count, groupIdMap.Count, imageIdMap.Count, galleryCount)
+            {
+                UnconvertedExcludePatterns = unconvertedExcludePatterns,
+            };
         }
         finally
         {
