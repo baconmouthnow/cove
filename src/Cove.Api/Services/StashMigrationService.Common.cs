@@ -230,8 +230,13 @@ public partial class StashMigrationService
     }
 
     private static string NormalizePathMappingComponent(string path)
+        => NormalizeMappedPath(path.Trim());
+
+    // Only the mapping's typed source and target are trimmed. A data path keeps its whitespace:
+    // folder and file names may end in a space or a no-break space.
+    private static string NormalizeMappedPath(string path)
     {
-        var normalized = NormalizeImportedPath(path.Trim());
+        var normalized = NormalizeImportedPath(path);
         return normalized == "/" ? normalized : normalized.TrimEnd('/');
     }
 
@@ -256,7 +261,7 @@ public partial class StashMigrationService
         if (string.IsNullOrWhiteSpace(path) || pathMappings.Count == 0)
             return path;
 
-        var normalizedPath = NormalizePathMappingComponent(path);
+        var normalizedPath = NormalizeMappedPath(path);
         foreach (var mapping in pathMappings)
         {
             if (string.Equals(normalizedPath, mapping.Source, StringComparison.OrdinalIgnoreCase))
