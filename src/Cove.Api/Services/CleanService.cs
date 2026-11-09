@@ -14,7 +14,7 @@ public class CleanService(
     ILogger<CleanService> logger) : ICleanService
 {
     private sealed record CleanFileInfo(int Id, string Path, int? ZipFileId);
-    private sealed record CleanFolderInfo(int Id, string Path, int? ZipFileId);
+    private sealed record CleanFolderInfo(string Path, int? ZipFileId);
     private sealed class CleanEntity
     {
         public int Id { get; init; }
@@ -51,7 +51,7 @@ public class CleanService(
             await InspectAsync(db, plan, "gallery", db.Galleries.AsNoTracking()
                 .Select(gallery => new CleanEntity { Id = gallery.Id,
                     Files = gallery.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList(),
-                    Folder = gallery.Folder == null ? null : new CleanFolderInfo(gallery.Folder.Id, gallery.Folder.Path, gallery.Folder.ZipFileId) }), scopedPaths, exclusions, progress, ct);
+                    Folder = gallery.Folder == null ? null : new CleanFolderInfo(gallery.Folder.Path, gallery.Folder.ZipFileId) }), scopedPaths, exclusions, progress, ct);
 
             var missing = await plan.CountAsync("files", ct);
             var excluded = await plan.CountAsync("excluded-files", ct);
@@ -183,7 +183,7 @@ public class CleanService(
                         orphan = InScope(folder.Path, folder.ZipFileId)
                             && !(folder.ZipFileId is int id ? archives.TryGetValue(id, out var archive) && Exists(archive) : Directory.Exists(folder.Path));
                         if (!orphan && exclusions != null && folder.ZipFileId == null && InScope(folder.Path, null))
-                            orphan = await AreFolderImagesExcludedAsync(db, folder.Id, exclusions, Exists, ct);
+                            orphan = exclusions.CoversEveryImageIn(folder.Path);
                     }
                     else
                         orphan = entity.Files.Count > 0 && removedIds.Count > 0 && entity.Files.All(file => removedIds.Contains(file.Id));
@@ -197,33 +197,6 @@ public class CleanService(
             if (refresh.Count > 0) await plan.AddAsync($"refresh-{kind}", refresh, ct);
             checkedCount += batch.Count;
             progress.Report((double)checkedCount / Math.Max(total, 1), $"Checking {kind} records ({checkedCount}/{total})");
-        }
-    }
-
-    /// <summary>
-    /// True when the exclusions cover the images in a folder gallery's folder and none of them stays. A scan
-    /// makes a folder gallery only for a folder that holds images, so it would not make this one again.
-    /// </summary>
-    private static async Task<bool> AreFolderImagesExcludedAsync(CoveContext db, int folderId, ScanExclusions exclusions,
-        Func<string, bool> exists, CancellationToken ct)
-    {
-        var excluded = false;
-        int? afterId = null;
-        while (true)
-        {
-            var page = await db.ImageFiles.AsNoTracking()
-                .Where(file => file.ParentFolderId == folderId && file.ZipFileId == null && file.ImageId != null
-                    && (afterId == null || file.Id > afterId))
-                .OrderBy(file => file.Id).Take(CleanPlan.BatchSize).Select(file => new { file.Id, file.Path }).ToListAsync(ct);
-            if (page.Count == 0) return excluded;
-            afterId = page[^1].Id;
-            foreach (var file in page)
-            {
-                // A missing image goes in this clean anyway.
-                if (!exists(file.Path)) continue;
-                if (!exclusions.IsExcluded(file.Path)) return false;
-                excluded = true;
-            }
         }
     }
 
