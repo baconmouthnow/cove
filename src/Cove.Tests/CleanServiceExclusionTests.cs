@@ -68,15 +68,18 @@ public sealed class CleanServiceExclusionTests
     public async Task CleanRemovesGalleriesTheExclusionsLeaveWithoutImages()
     {
         await using var library = await Library.CreateAsync();
-        library.Config.ExcludePatterns = ["Extras/**"];
+        library.Config.ExcludePatterns = ["Extras/**", "skip-*.jpg"];
         await library.AddArchiveGalleryAsync("Library/Extras/set.zip", "page.jpg");
         await library.AddFolderGalleryAsync("Library/Extras/Pictures", "a.jpg", "b.jpg");
         var keptGallery = await library.AddFolderGalleryAsync("Library/Pictures", "a.jpg");
+        // The next scan adds new.jpg, so it keeps this folder's gallery too.
+        var partlyExcludedGallery = await library.AddFolderGalleryAsync("Library/Mixed", "skip-me.jpg");
+        library.Write("Library/Mixed/new.jpg");
 
         await library.CleanAsync(removeExcluded: true);
 
         await using var db = library.Open();
-        Assert.Equal([keptGallery], await db.Galleries.Select(gallery => gallery.Id).ToListAsync(TestContext.Current.CancellationToken));
+        Assert.Equal([keptGallery, partlyExcludedGallery], await db.Galleries.Select(gallery => gallery.Id).Order().ToListAsync(TestContext.Current.CancellationToken));
         Assert.Equal([library.StoredPath("Library/Pictures/a.jpg")], await db.ImageFiles.Select(file => file.Path).ToListAsync(TestContext.Current.CancellationToken));
         Assert.Empty(await db.GalleryFiles.ToListAsync(TestContext.Current.CancellationToken));
     }

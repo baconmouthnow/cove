@@ -51,6 +51,32 @@ internal sealed class ScanExclusions
         return excluded;
     }
 
+    /// <summary>
+    /// True when <paramref name="folder"/> holds image files and the exclusions cover every one of them. A scan makes
+    /// a folder gallery only for a folder whose images it adds, so it would not make one for this folder.
+    /// </summary>
+    public bool CoversEveryImageIn(string folder)
+    {
+        var covered = false;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(folder, "*", new EnumerationOptions { AttributesToSkip = 0 }))
+            {
+                if (!_extensions.Image.Contains(Path.GetExtension(file)))
+                    continue;
+                if (!IsExcluded(file))
+                    return false;
+                covered = true;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+
+        return covered;
+    }
+
     private bool IsExcludedUnder(ScanTarget libraryPath, string fullPath)
     {
         var relativePath = Path.GetRelativePath(libraryPath.PatternRoot, fullPath);
