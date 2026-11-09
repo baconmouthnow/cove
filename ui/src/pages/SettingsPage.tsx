@@ -6211,6 +6211,7 @@ function LibraryTasksSection({ refetchJobs, mode }: { refetchJobs: () => void; m
 function DataManagementSection({ refetchJobs, mode }: { refetchJobs: () => void; mode: "maintenance" | "backup" }) {
   const queryClient = useQueryClient();
   const [cleanDryRun, setCleanDryRun] = useState(false);
+  const [cleanRemoveExcluded, setCleanRemoveExcluded] = useState(false);
   const [showCleanGenOpts, setShowCleanGenOpts] = useState(false);
   const [cleanGenOpts, setCleanGenOpts] = useState<CleanGeneratedOptions>({
     screenshots: true,
@@ -6232,7 +6233,7 @@ function DataManagementSection({ refetchJobs, mode }: { refetchJobs: () => void;
   });
 
   const cleanMut = useMutation({
-    mutationFn: () => metadata.clean({ dryRun: cleanDryRun }),
+    mutationFn: () => metadata.clean({ dryRun: cleanDryRun, removeExcluded: cleanRemoveExcluded }),
     onSuccess: () => refetchJobs(),
   });
   const cleanGenMut = useMutation({
@@ -6380,11 +6381,17 @@ function DataManagementSection({ refetchJobs, mode }: { refetchJobs: () => void;
               onRun={() => cleanMut.mutate()}
               isPending={cleanMut.isPending}
             >
-              <div className="pt-3 border-t border-border/50">
+              <div className="space-y-2 pt-3 border-t border-border/50">
                 <CheckboxLabel
                   label="Dry run (report only, don't delete)"
                   checked={cleanDryRun}
                   onChange={setCleanDryRun}
+                />
+                <CheckboxLabel
+                  label="Also remove excluded files (keeps them on disk)"
+                  description="Also removes the entries of files that the exclude patterns, a .coveignore or .stashignore file, or a library path's media-type exclusions now cover. The files stay on disk."
+                  checked={cleanRemoveExcluded}
+                  onChange={setCleanRemoveExcluded}
                 />
               </div>
             </TaskCard>

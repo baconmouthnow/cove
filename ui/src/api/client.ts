@@ -2267,6 +2267,7 @@ export interface LibraryFolder {
 export interface CleanOptions {
   paths?: string[];
   dryRun?: boolean;
+  removeExcluded?: boolean;
 }
 
 export interface CleanGeneratedOptions {

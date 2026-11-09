@@ -10,10 +10,11 @@ namespace Cove.Api.Services;
 public class CleanService(
     IJobService jobService,
     IServiceScopeFactory scopeFactory,
+    CoveConfiguration config,
     ILogger<CleanService> logger) : ICleanService
 {
     private sealed record CleanFileInfo(int Id, string Path, int? ZipFileId);
-    private sealed record CleanFolderInfo(string Path, int? ZipFileId);
+    private sealed record CleanFolderInfo(int Id, string Path, int? ZipFileId);
     private sealed class CleanEntity
     {
         public int Id { get; init; }
@@ -22,6 +23,13 @@ public class CleanService(
     }
 
     public string StartClean(bool dryRun = false, IReadOnlyList<string>? paths = null)
+        => StartClean(dryRun, paths, removeExcluded: false);
+
+    /// <param name="removeExcluded">
+    /// Also removes the records of files the scan exclusions cover, and media left with no file. The
+    /// files stay on disk.
+    /// </param>
+    public string StartClean(bool dryRun, IReadOnlyList<string>? paths, bool removeExcluded)
     {
         var scopedPaths = GeneratePathFilter.Normalize(paths);
         return jobService.Enqueue("clean", dryRun ? "Cleaning (dry run)" : "Cleaning library", async (progress, ct) =>
@@ -29,32 +37,43 @@ public class CleanService(
             using var scope = scopeFactory.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<CoveContext>();
             await using var plan = await CleanPlan.CreateAsync(ct);
+            var exclusions = removeExcluded ? new ScanExclusions(config) : null;
 
             // Clips use their parent's file; a fileless clip must never be classified as an orphan.
             await InspectAsync(db, plan, "video", db.Videos.AsNoTracking().Where(video => video.ParentVideoId == null)
-                .Select(video => new CleanEntity { Id = video.Id, Files = video.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList() }), scopedPaths, progress, ct);
+                .Select(video => new CleanEntity { Id = video.Id, Files = video.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList() }), scopedPaths, exclusions, progress, ct);
             await InspectAsync(db, plan, "image", db.Images.AsNoTracking()
-                .Select(image => new CleanEntity { Id = image.Id, Files = image.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList() }), scopedPaths, progress, ct);
+                .Select(image => new CleanEntity { Id = image.Id, Files = image.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList() }), scopedPaths, exclusions, progress, ct);
             await InspectAsync(db, plan, "audio", db.Audios.AsNoTracking()
-                .Select(audio => new CleanEntity { Id = audio.Id, Files = audio.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList() }), scopedPaths, progress, ct);
+                .Select(audio => new CleanEntity { Id = audio.Id, Files = audio.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList() }), scopedPaths, exclusions, progress, ct);
             await InspectAsync(db, plan, "text", db.TextDocuments.AsNoTracking()
-                .Select(text => new CleanEntity { Id = text.Id, Files = text.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList() }), scopedPaths, progress, ct);
+                .Select(text => new CleanEntity { Id = text.Id, Files = text.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList() }), scopedPaths, exclusions, progress, ct);
             await InspectAsync(db, plan, "gallery", db.Galleries.AsNoTracking()
                 .Select(gallery => new CleanEntity { Id = gallery.Id,
                     Files = gallery.Files.Select(file => new CleanFileInfo(file.Id, file.Path, file.ZipFileId)).ToList(),
-                    Folder = gallery.Folder == null ? null : new CleanFolderInfo(gallery.Folder.Path, gallery.Folder.ZipFileId) }), scopedPaths, progress, ct);
+                    Folder = gallery.Folder == null ? null : new CleanFolderInfo(gallery.Folder.Id, gallery.Folder.Path, gallery.Folder.ZipFileId) }), scopedPaths, exclusions, progress, ct);
 
             var missing = await plan.CountAsync("files", ct);
+            var excluded = await plan.CountAsync("excluded-files", ct);
             var videos = await plan.CountAsync("video", ct);
             var images = await plan.CountAsync("image", ct);
             var galleries = await plan.CountAsync("gallery", ct);
             var audios = await plan.CountAsync("audio", ct);
             var texts = await plan.CountAsync("text", ct);
-            logger.LogInformation("Clean found {MissingFiles} missing files, {Videos} orphaned videos, {Images} orphaned images, {Galleries} orphaned galleries, {Audios} orphaned audios, {Texts} orphaned texts",
-                missing, videos, images, galleries, audios, texts);
+            var orphans = videos + images + galleries + audios + texts;
+            logger.LogInformation("Clean found {MissingFiles} missing files, {ExcludedFiles} excluded files, {Videos} orphaned videos, {Images} orphaned images, {Galleries} orphaned galleries, {Audios} orphaned audios, {Texts} orphaned texts",
+                missing, excluded, videos, images, galleries, audios, texts);
             if (dryRun)
             {
+                // Name each excluded file, so the user can check what the exclusions cover before a real clean.
+                await foreach (var ids in plan.ReadAsync("excluded-files", ct))
+                    foreach (var path in await db.Set<BaseFileEntity>().AsNoTracking().Where(file => ids.Contains(file.Id))
+                        .OrderBy(file => file.Id).Select(file => file.Path).ToListAsync(ct))
+                        logger.LogInformation("Dry run: Clean would remove the record of excluded file {Path}; the file stays on disk", path);
                 logger.LogInformation("Dry run - no changes made");
+                progress.SetSummary(removeExcluded
+                    ? $"Dry run found {missing} missing files, {excluded} excluded files and {orphans} orphaned items; nothing was removed"
+                    : $"Dry run found {missing} missing files and {orphans} orphaned items; nothing was removed");
                 return;
             }
 
@@ -63,19 +82,20 @@ public class CleanService(
             // Orphans go through the same deletion path as a user delete so polymorphic rows (tag
             // applications, segments, group items, provenance), custom field values, cover blobs and
             // generated files go with them and extensions receive the Deleted events.
-            var removal = new OrphanRemoval(videos + images + galleries + audios + texts);
+            var removal = new OrphanRemoval(orphans);
             await DeleteOrphansAsync(plan, "video", BulkDeletionEntityKind.Video, removal, progress, ct);
             await DeleteOrphansAsync(plan, "image", BulkDeletionEntityKind.Image, removal, progress, ct);
             await DeleteOrphansAsync(plan, "gallery", BulkDeletionEntityKind.Gallery, removal, progress, ct);
             await DeleteOrphansAsync(plan, "audio", BulkDeletionEntityKind.Audio, removal, progress, ct);
             await DeleteOrphansAsync(plan, "text", BulkDeletionEntityKind.Text, removal, progress, ct);
 
-            // Orphans took their own files with them; this prunes missing files of surviving entities.
-            // Shot boundaries of pruned files go with them: a file that vanished from disk may have been
-            // replaced or lost, and nothing here can tell which.
+            // Orphans took their own files with them; this prunes the missing and excluded files of surviving
+            // entities. Shot boundaries of pruned files go with them: a file that vanished from disk may have
+            // been replaced or lost, and nothing here can tell which.
             var pruned = 0;
-            await foreach (var ids in plan.ReadAsync("files", ct))
-                pruned += await db.Set<BaseFileEntity>().Where(file => ids.Contains(file.Id)).ExecuteDeleteAsync(ct);
+            foreach (var files in new[] { "files", "excluded-files" })
+                await foreach (var ids in plan.ReadAsync(files, ct))
+                    pruned += await db.Set<BaseFileEntity>().Where(file => ids.Contains(file.Id)).ExecuteDeleteAsync(ct);
 
             await foreach (var ids in plan.ReadAsync("refresh-audio", ct))
             {
@@ -103,7 +123,7 @@ public class CleanService(
                 progress.Report(1d, "Recomputing library counts");
                 recomputed = await db.RecomputeAllDerivedCountsAsync(cancellationToken: ct);
             }
-            logger.LogInformation("Clean completed: removed {Removed} of {Orphans} orphaned items ({Failed} failed), {Files} missing files of surviving items, {DanglingFiles} dangling files; recomputed {Recomputed} entity counts",
+            logger.LogInformation("Clean completed: removed {Removed} of {Orphans} orphaned items ({Failed} failed), {Files} missing or excluded files of surviving items, {DanglingFiles} dangling files; recomputed {Recomputed} entity counts",
                 removal.Removed, removal.Total, removal.Failed, pruned, dangling, recomputed);
             if (removal.Failed > 0)
                 progress.SetSummary($"Removed {removal.Removed} of {removal.Total} orphaned items; {removal.Failed} could not be removed (see log)");
@@ -111,7 +131,7 @@ public class CleanService(
     }
 
     private static async Task InspectAsync(CoveContext db, CleanPlan plan, string kind, IQueryable<CleanEntity> query,
-        IReadOnlyList<string> paths, IJobProgress progress, CancellationToken ct)
+        IReadOnlyList<string> paths, ScanExclusions? exclusions, IJobProgress progress, CancellationToken ct)
     {
         int? afterId = null;
         var checkedCount = 0;
@@ -141,33 +161,69 @@ public class CleanService(
             string PhysicalPath(string path, int? archiveId) => archiveId is int id && archives.TryGetValue(id, out var archive) ? archive : path;
             bool InScope(string path, int? archiveId) => GeneratePathFilter.Contains(PhysicalPath(path, archiveId), paths);
             bool FileExists(CleanFileInfo file) => file.ZipFileId is int id ? archives.TryGetValue(id, out var archive) && Exists(archive) : Exists(file.Path);
+            bool Excluded(CleanFileInfo file) => exclusions?.IsExcluded(PhysicalPath(file.Path, file.ZipFileId)) == true;
             var missingFiles = new List<int>();
+            var excludedFiles = new List<int>();
             var orphans = new List<int>();
             var refresh = new List<int>();
             foreach (var entity in batch)
             {
                 ct.ThrowIfCancellationRequested();
                 var missingIds = entity.Files.Where(file => InScope(file.Path, file.ZipFileId) && !FileExists(file)).Select(file => file.Id).ToHashSet();
+                var excludedIds = entity.Files.Where(file => InScope(file.Path, file.ZipFileId) && !missingIds.Contains(file.Id) && Excluded(file))
+                    .Select(file => file.Id).ToHashSet();
                 missingFiles.AddRange(missingIds);
-                var orphan = (paths.Count == 0 || missingIds.Count > 0) && entity.Files.All(file => missingIds.Contains(file.Id));
+                excludedFiles.AddRange(excludedIds);
+                var removedIds = missingIds.Union(excludedIds).ToHashSet();
+                var orphan = (paths.Count == 0 || removedIds.Count > 0) && entity.Files.All(file => removedIds.Contains(file.Id));
                 if (kind == "gallery")
                 {
                     if (entity.Folder is { } folder)
                     {
                         orphan = InScope(folder.Path, folder.ZipFileId)
                             && !(folder.ZipFileId is int id ? archives.TryGetValue(id, out var archive) && Exists(archive) : Directory.Exists(folder.Path));
+                        if (!orphan && exclusions != null && folder.ZipFileId == null && InScope(folder.Path, null))
+                            orphan = await AreFolderImagesExcludedAsync(db, folder.Id, exclusions, Exists, ct);
                     }
                     else
-                        orphan = entity.Files.Count > 0 && missingIds.Count > 0 && entity.Files.All(file => missingIds.Contains(file.Id));
+                        orphan = entity.Files.Count > 0 && removedIds.Count > 0 && entity.Files.All(file => removedIds.Contains(file.Id));
                 }
                 if (orphan) orphans.Add(entity.Id);
-                else if (missingIds.Count > 0 && kind is "audio" or "text") refresh.Add(entity.Id);
+                else if (removedIds.Count > 0 && kind is "audio" or "text") refresh.Add(entity.Id);
             }
             await plan.AddAsync("files", missingFiles, ct);
+            await plan.AddAsync("excluded-files", excludedFiles, ct);
             await plan.AddAsync(kind, orphans, ct);
             if (refresh.Count > 0) await plan.AddAsync($"refresh-{kind}", refresh, ct);
             checkedCount += batch.Count;
             progress.Report((double)checkedCount / Math.Max(total, 1), $"Checking {kind} records ({checkedCount}/{total})");
+        }
+    }
+
+    /// <summary>
+    /// True when the exclusions cover the images in a folder gallery's folder and none of them stays. A scan
+    /// makes a folder gallery only for a folder that holds images, so it would not make this one again.
+    /// </summary>
+    private static async Task<bool> AreFolderImagesExcludedAsync(CoveContext db, int folderId, ScanExclusions exclusions,
+        Func<string, bool> exists, CancellationToken ct)
+    {
+        var excluded = false;
+        int? afterId = null;
+        while (true)
+        {
+            var page = await db.ImageFiles.AsNoTracking()
+                .Where(file => file.ParentFolderId == folderId && file.ZipFileId == null && file.ImageId != null
+                    && (afterId == null || file.Id > afterId))
+                .OrderBy(file => file.Id).Take(CleanPlan.BatchSize).Select(file => new { file.Id, file.Path }).ToListAsync(ct);
+            if (page.Count == 0) return excluded;
+            afterId = page[^1].Id;
+            foreach (var file in page)
+            {
+                // A missing image goes in this clean anyway.
+                if (!exists(file.Path)) continue;
+                if (!exclusions.IsExcluded(file.Path)) return false;
+                excluded = true;
+            }
         }
     }
 
@@ -195,8 +251,9 @@ public class CleanService(
                 ct.ThrowIfCancellationRequested();
                 try
                 {
-                    // The files are already gone from disk, but their generated files are now useless.
-                    // False means the entity was removed concurrently since inspection.
+                    // deleteFiles: false keeps the files on disk. Missing ones are gone already and excluded ones
+                    // stay where they are; only their generated files go. False means the entity was removed
+                    // concurrently since inspection.
                     if (await deletion.DeleteAsync(entityKind, id, removal.Context, deleteFiles: false, deleteGenerated: true, CancellationToken.None))
                         removal.Removed++;
                 }
@@ -211,7 +268,9 @@ public class CleanService(
                     // (a fileless entity is never an orphan in a path-scoped clean).
                     using var lookupScope = scopeFactory.CreateScope();
                     var lookupDb = lookupScope.ServiceProvider.GetRequiredService<CoveContext>();
-                    await plan.RemoveAsync("files", await OwnedFileIds(lookupDb, entityKind, id).ToListAsync(ct), ct);
+                    var ownedFileIds = await OwnedFileIds(lookupDb, entityKind, id).ToListAsync(ct);
+                    await plan.RemoveAsync("files", ownedFileIds, ct);
+                    await plan.RemoveAsync("excluded-files", ownedFileIds, ct);
                 }
                 removal.Processed++;
                 progress.Report((double)removal.Processed / Math.Max(removal.Total, 1),
