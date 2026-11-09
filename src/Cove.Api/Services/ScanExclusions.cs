@@ -20,14 +20,7 @@ internal sealed class ScanExclusions
     {
         _extensions = ScanExtensionCatalog.From(config);
         _patterns = new ConfiguredScanPatternMatcher(config);
-        _libraryPaths = [.. config.CovePaths.Select(path => new ScanTarget(
-            ScanPath.Normalize(path.Path),
-            path.ExcludeVideo,
-            path.ExcludeImage,
-            path.ExcludeAudio,
-            path.ExcludeText,
-            false,
-            ScanPath.Normalize(path.Path)))];
+        _libraryPaths = [.. ScanDiscoveryService.ResolveScanTargets(config, null)];
     }
 
     /// <summary>
