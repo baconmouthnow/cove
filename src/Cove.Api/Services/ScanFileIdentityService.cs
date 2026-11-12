@@ -54,15 +54,16 @@ internal sealed class ScanFileIdentityService(IFingerprintService fingerprintSer
         var claim = missing.FirstOrDefault(candidate => IsClaimedBy(candidate, path, moveIndex));
         if (claim == null)
         {
-            // Moving every copy of an entity leaves each copy's row missing, and each new path takes one of them.
-            // A row with the same name is the likelier source. Content alone cannot tell two entities apart, so a
-            // path takes no row while the unclaimed rows belong to more than one entity.
+            // Moving every copy of an entity leaves each copy's row missing, and each new path takes one of them,
+            // a row with its own name first. Another path may claim a row at any moment, so try them all. Content
+            // alone cannot tell two entities apart, so a path takes no row while the unclaimed rows belong to more
+            // than one entity.
             var unclaimed = missing.Where(candidate => !moveIndex.ClaimedFilePaths.ContainsKey(candidate.Id)).ToList();
             if (unclaimed.Select(OwnerId).Distinct().Count() == 1)
             {
-                var sameName = unclaimed.Where(candidate => string.Equals(candidate.Basename, basename, FilesystemPaths.PathComparison)).ToList();
-                var choices = sameName.Count > 0 ? sameName : unclaimed;
-                claim = choices.FirstOrDefault(candidate => moveIndex.ClaimedFilePaths.TryAdd(candidate.Id, path));
+                claim = unclaimed
+                    .OrderBy(candidate => string.Equals(candidate.Basename, basename, FilesystemPaths.PathComparison) ? 0 : 1)
+                    .FirstOrDefault(candidate => moveIndex.ClaimedFilePaths.TryAdd(candidate.Id, path));
             }
         }
 
