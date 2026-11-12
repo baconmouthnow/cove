@@ -43,6 +43,26 @@ public sealed class ScanFileIdentityServiceTests
         }
     }
 
+    [Theory]
+    // Stash hashes a file shorter than 64 KiB from its first and last whole 8-byte words: here bytes 1-16 and
+    // 5-20, plus the size. Files imported from Stash carry that value.
+    [InlineData(20, "3834302c28242030")]
+    [InlineData(8, null)]
+    public async Task ComputeOshashAsync_HashesAShortFileAsStashDoes(int length, string? expected)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"cove-short-oshash-{Guid.NewGuid():N}.bin");
+        await File.WriteAllBytesAsync(path, [.. Enumerable.Range(1, length).Select(value => (byte)value)], TestContext.Current.CancellationToken);
+
+        try
+        {
+            Assert.Equal(expected, await ScanFileIdentityService.ComputeOshashAsync(path, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     [RequiresPostgres]
     public async Task MatchExistingAsync_DoesNotQueryDatabaseWhenHashIsNotKnown()

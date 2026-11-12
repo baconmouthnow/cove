@@ -132,11 +132,12 @@ internal sealed class ScanFileIdentityService(IFingerprintService fingerprintSer
     }
 
     /// <summary>
-    /// Computes the OpenSubtitles hash from the file size plus its first and last 64 KiB.
+    /// Computes the OpenSubtitles hash from the file size plus its first and last 64 KiB. As in Stash, a file
+    /// shorter than that uses its first and last whole 8-byte words, and a file of 8 bytes or fewer has none.
     /// </summary>
     public static async Task<string?> ComputeOshashAsync(string path, CancellationToken ct)
     {
-        const int chunkSize = 65_536;
+        const int maxChunkSize = 65_536;
         try
         {
             await using var stream = new FileStream(
@@ -144,11 +145,13 @@ internal sealed class ScanFileIdentityService(IFingerprintService fingerprintSer
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.Read,
-                chunkSize,
+                maxChunkSize,
                 useAsync: true);
             var fileSize = stream.Length;
-            if (fileSize < chunkSize)
+            if (fileSize <= 8)
                 return null;
+
+            var chunkSize = (int)Math.Min(maxChunkSize, fileSize / 8 * 8);
 
             ulong hash = (ulong)fileSize;
             var buffer = new byte[chunkSize];
