@@ -13,8 +13,9 @@ namespace Cove.Api.Services;
 internal sealed class ScanFileIdentityService(IFingerprintService fingerprintService)
 {
     /// <summary>
-    /// Matches a newly observed path to an existing row by byte identity. A single missing candidate is
-    /// re-pointed as a move; an on-disk candidate identifies a duplicate's parent entity.
+    /// Matches a newly observed path to an existing row by byte identity. A missing candidate is re-pointed as
+    /// a move when every missing candidate the path could take belongs to one entity; an on-disk candidate
+    /// identifies a duplicate's parent entity.
     /// </summary>
     public async Task<(TFile? Match, bool IsMove)> MatchExistingAsync<TFile>(
         DbSet<TFile> trackedSet,
@@ -45,26 +46,42 @@ internal sealed class ScanFileIdentityService(IFingerprintService fingerprintSer
 
         var missing = candidates
             .Where(candidate => !string.IsNullOrEmpty(candidate.Path) && !File.Exists(candidate.Path))
+            .OrderBy(candidate => candidate.Id)
             .ToList();
 
-        if (missing.Count == 1)
+        // The claiming path may retry after a failed batch save. Re-apply the move so the fallback
+        // preserves the existing row and entity identity.
+        var claim = missing.FirstOrDefault(candidate => IsClaimedBy(candidate, path, moveIndex));
+        if (claim == null)
         {
-            var claim = missing[0];
-            if (!moveIndex.ClaimedFilePaths.TryAdd(claim.Id, path)
-                && (!moveIndex.ClaimedFilePaths.TryGetValue(claim.Id, out var claimedPath)
-                    || !string.Equals(claimedPath, path, FilesystemPaths.PathComparison)))
+            // Moving every copy of an entity leaves each copy's row missing, and each new path takes one of them,
+            // a row with its own name first. Another path may claim a row at any moment, so try them all. Content
+            // alone cannot tell two entities apart, so a path takes no row while the unclaimed rows belong to more
+            // than one entity.
+            var unclaimed = missing.Where(candidate => !moveIndex.ClaimedFilePaths.ContainsKey(candidate.Id)).ToList();
+            if (unclaimed.Select(OwnerId).Distinct().Count() == 1)
             {
-                return (claim, false);
+                claim = unclaimed
+                    .OrderBy(candidate => string.Equals(candidate.Basename, basename, FilesystemPaths.PathComparison) ? 0 : 1)
+                    .FirstOrDefault(candidate => moveIndex.ClaimedFilePaths.TryAdd(candidate.Id, path));
             }
+        }
 
-            // The claiming path may retry after a failed batch save. Re-apply the move so the fallback
-            // preserves the existing row and entity identity.
+        if (claim != null)
+        {
             claim.ParentFolderId = folderId;
             claim.ParentFolder = null;
             claim.Basename = basename;
             claim.Size = stat.Size;
             claim.ModTime = stat.ModTime;
             return (claim, true);
+        }
+
+        // Other paths took every missing row of one entity: this is one more copy of its content.
+        if (missing.Count > 0 && missing.Select(OwnerId).Distinct().Count() == 1
+            && missing.All(candidate => moveIndex.ClaimedFilePaths.ContainsKey(candidate.Id)))
+        {
+            return (missing[0], false);
         }
 
         var present = candidates
@@ -74,6 +91,19 @@ internal sealed class ScanFileIdentityService(IFingerprintService fingerprintSer
 
         return present != null ? (present, false) : (null, false);
     }
+
+    private static bool IsClaimedBy(BaseFileEntity candidate, string path, MoveDetectionIndex moveIndex)
+        => moveIndex.ClaimedFilePaths.TryGetValue(candidate.Id, out var claimedPath)
+            && string.Equals(claimedPath, path, FilesystemPaths.PathComparison);
+
+    private static int? OwnerId(BaseFileEntity file) => file switch
+    {
+        VideoFile video => video.VideoId,
+        ImageFile image => image.ImageId,
+        AudioFile audio => audio.AudioId,
+        TextFile text => text.TextDocumentId,
+        _ => throw new NotSupportedException($"{file.GetType().Name} has no move detection."),
+    };
 
     public async Task RefreshChangedFingerprintsAsync(
         BaseFileEntity file,
