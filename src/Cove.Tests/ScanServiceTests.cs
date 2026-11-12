@@ -2556,6 +2556,47 @@ public class ScanServiceTests
 
     [Fact]
     [RequiresPostgres]
+    public async Task StartScan_RelinksNeitherOfTwoVideosWithTheSameContentWhenBothMove()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"cove-scan-{Guid.NewGuid():N}");
+        var oldFolder = Path.Combine(tempRoot, "old");
+        Directory.CreateDirectory(oldFolder);
+
+        try
+        {
+            // A first scan has no stored fingerprints to match, so the two identical files become two videos.
+            await WriteValidVideoAsync(Path.Combine(oldFolder, "first.mp4"), minimumLength: 70_000);
+            File.Copy(Path.Combine(oldFolder, "first.mp4"), Path.Combine(oldFolder, "second.mp4"));
+            await using var environment = await CreateBareEnvironmentAsync(tempRoot);
+            environment.Service.StartScan();
+
+            int[] fileIds;
+            await using (var scope = environment.Services.CreateAsyncScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<CoveContext>();
+                Assert.Equal(2, await db.Videos.CountAsync(TestContext.Current.CancellationToken));
+                fileIds = [.. await db.VideoFiles.Select(file => file.Id).ToListAsync(TestContext.Current.CancellationToken)];
+            }
+
+            Directory.Move(oldFolder, Path.Combine(tempRoot, "new"));
+            environment.Service.StartScan();
+
+            // Identical content cannot say which video a new path belongs to, even when a name matches, so the
+            // scan moves neither video's file.
+            await using var verificationScope = environment.Services.CreateAsyncScope();
+            var verificationDb = verificationScope.ServiceProvider.GetRequiredService<CoveContext>();
+            var originalFiles = await verificationDb.VideoFiles.Where(file => fileIds.Contains(file.Id)).ToListAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(2, originalFiles.Count);
+            Assert.All(originalFiles, file => Assert.Contains("/old/", file.Path));
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    [RequiresPostgres]
     public async Task StartScan_FolderGalleriesDeduplicateImagesWithinEachFolderAndRemainIdempotent()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"cove-folder-gallery-{Guid.NewGuid():N}");
