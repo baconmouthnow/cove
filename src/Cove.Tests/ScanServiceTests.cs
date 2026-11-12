@@ -2360,9 +2360,12 @@ public class ScanServiceTests
         Assert.Equal(30, videoFile.FrameRate);
     }
 
-    [Fact]
+    [Theory]
     [RequiresPostgres]
-    public async Task StartScan_RelinksMovedVideoInsteadOfCreatingDuplicate()
+    [InlineData(70_000)]
+    // The test video alone is shorter than the 64 KiB an oshash reads from each end of a file.
+    [InlineData(0)]
+    public async Task StartScan_RelinksMovedVideoInsteadOfCreatingDuplicate(int minimumLength)
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), $"cove-scan-{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempRoot);
@@ -2370,7 +2373,7 @@ public class ScanServiceTests
         try
         {
             var originalPath = Path.Combine(tempRoot, "original.mp4");
-            await WriteValidVideoAsync(originalPath, minimumLength: 70_000);
+            await WriteValidVideoAsync(originalPath, minimumLength);
 
             await using var environment = await CreateBareEnvironmentAsync(tempRoot);
 
