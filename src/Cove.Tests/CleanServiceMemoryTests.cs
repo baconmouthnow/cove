@@ -232,6 +232,52 @@ public sealed class CleanServiceMemoryTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    [Fact]
+    public async Task CleanRemovingGalleriesOneAtATimeCarriesNoImagesFromOneDeletionToTheNext()
+    {
+        await using var database = await CovePostgresDatabase.CreateAsync(TestContext.Current.CancellationToken);
+        var root = Path.Combine(Path.GetTempPath(), $"cove-clean-galleries-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        try
+        {
+            var pageFailure = new GalleryPageFailure();
+            var options = database.CreateOptions(builder => builder.AddInterceptors(pageFailure));
+            var services = new ServiceCollection();
+            services.AddScoped(_ => new CoveContext(options));
+            AddDeletionServices(services);
+            await using var provider = services.BuildServiceProvider();
+            await using (var db = new CoveContext(options))
+            {
+                // Each gallery's archive is gone, but its images are still on disk.
+                var folder = new Folder { Path = root };
+                for (var set = 0; set < 4; set++)
+                {
+                    var gallery = new Gallery { Title = $"set {set}", Files = [new GalleryFile { ParentFolder = folder, Basename = $"set {set}.zip" }] };
+                    for (var picture = 0; picture < 3; picture++)
+                    {
+                        var basename = $"set {set} picture {picture}.jpg";
+                        await File.WriteAllBytesAsync(Path.Combine(root, basename), [1], TestContext.Current.CancellationToken);
+                        db.Images.Add(new Image { Files = [new ImageFile { ParentFolder = folder, Basename = basename }], ImageGalleries = [new ImageGallery { Gallery = gallery }] });
+                    }
+                }
+                await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+            }
+
+            var jobs = new CapturingJobs(new InspectionGuard(), TestContext.Current.CancellationToken);
+            new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CleanService>.Instance).StartClean();
+            await jobs.Completion;
+
+            // Deleting a gallery refreshes its images' gallery counts, which loads them. A one-at-a-time deletion
+            // that still tracks earlier galleries' images scans them again at every save, so a page of large
+            // galleries took longer with each one.
+            Assert.Equal([0, 0, 0, 0], pageFailure.TrackedImages);
+            await using var verify = new CoveContext(options);
+            Assert.Equal(0, await verify.Galleries.CountAsync(TestContext.Current.CancellationToken));
+            Assert.Equal(12, await verify.Images.CountAsync(TestContext.Current.CancellationToken));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -486,6 +532,25 @@ public sealed class CleanServiceMemoryTests
         {
             if (Enabled)
                 Interlocked.Increment(ref counter);
+        }
+    }
+
+    // Fails the save that removes a page of galleries together, so Clean removes them one at a time, and records
+    // how many images the context tracks when each of those deletions saves.
+    private sealed class GalleryPageFailure : SaveChangesInterceptor
+    {
+        public List<int> TrackedImages { get; } = [];
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData eventData,
+            InterceptionResult<int> result, CancellationToken cancellationToken = default)
+        {
+            var tracker = eventData.Context!.ChangeTracker;
+            var galleries = tracker.Entries<Gallery>().Count(entry => entry.State == EntityState.Deleted);
+            if (galleries > 1)
+                throw new DbUpdateException("Injected page failure");
+            if (galleries == 1)
+                TrackedImages.Add(tracker.Entries<Image>().Count());
+            return ValueTask.FromResult(result);
         }
     }
 
