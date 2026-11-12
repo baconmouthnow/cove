@@ -215,6 +215,10 @@ public class CleanService(
             {
                 // Cancel only between entities: each deletion runs its post-commit cleanup to completion.
                 ct.ThrowIfCancellationRequested();
+                // Each deletion starts with nothing tracked. A failed save leaves its staged changes tracked, and the
+                // next save would replay them, deleting that entity without its cleanup. A deleted gallery's images,
+                // loaded to refresh their gallery counts, would otherwise be scanned again by every later save.
+                db.ChangeTracker.Clear();
                 try
                 {
                     // The files are already gone from disk, but their generated files are now useless.
@@ -225,9 +229,6 @@ public class CleanService(
                 catch (Exception ex)
                 {
                     removal.Failed++;
-                    // A failed save leaves its staged changes tracked, and the next deletion's save in this
-                    // scope would replay them, deleting this entity without its cleanup.
-                    db.ChangeTracker.Clear();
                     logger.LogWarning(ex, "Clean could not remove orphaned {Kind} {Id}", kind, id);
                     // Keep the failed entity's file rows so the next clean still classifies it as an orphan
                     // (a fileless entity is never an orphan in a path-scoped clean).
