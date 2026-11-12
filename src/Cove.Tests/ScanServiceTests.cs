@@ -2501,6 +2501,59 @@ public class ScanServiceTests
         }
     }
 
+    [Theory]
+    [RequiresPostgres]
+    [InlineData("first/clip.mp4", "second/clip.mp4")]
+    [InlineData("clip.mp4", "clip copy.mp4")]
+    public async Task StartScan_RelinksEveryCopyOfAVideoWhenTheyMoveTogether(string originalName, string copyName)
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"cove-scan-{Guid.NewGuid():N}");
+        var oldFolder = Path.Combine(tempRoot, "old");
+        var originalPath = Path.Combine(oldFolder, originalName);
+        var copyPath = Path.Combine(oldFolder, copyName);
+        Directory.CreateDirectory(Path.GetDirectoryName(originalPath)!);
+        Directory.CreateDirectory(Path.GetDirectoryName(copyPath)!);
+
+        try
+        {
+            await WriteValidVideoAsync(originalPath, minimumLength: 70_000);
+            await using var environment = await CreateBareEnvironmentAsync(tempRoot);
+            environment.Service.StartScan();
+            File.Copy(originalPath, copyPath);
+            environment.Service.StartScan();
+
+            int videoId;
+            int[] fileIds;
+            await using (var scope = environment.Services.CreateAsyncScope())
+            {
+                var db = scope.ServiceProvider.GetRequiredService<CoveContext>();
+                var video = await db.Videos.Include(item => item.Files).SingleAsync(TestContext.Current.CancellationToken);
+                Assert.Equal(2, video.Files.Count);
+                video.Title = "Keep me";
+                await db.SaveChangesAsync(TestContext.Current.CancellationToken);
+                videoId = video.Id;
+                fileIds = [.. video.Files.Select(file => file.Id).Order()];
+            }
+
+            // Both copies leave their old paths in one move, so neither old row is the only missing one.
+            Directory.Move(oldFolder, Path.Combine(tempRoot, "new"));
+            environment.Service.StartScan();
+
+            await using var verificationScope = environment.Services.CreateAsyncScope();
+            var verificationDb = verificationScope.ServiceProvider.GetRequiredService<CoveContext>();
+            var moved = await verificationDb.Videos.Include(item => item.Files).SingleAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(videoId, moved.Id);
+            Assert.Equal("Keep me", moved.Title);
+            Assert.Equal(fileIds, moved.Files.Select(file => file.Id).Order());
+            Assert.All(moved.Files, file => Assert.Contains("/new/", file.Path));
+            Assert.Contains("0 imported, 2 updated", environment.JobService.LatestSubTask);
+        }
+        finally
+        {
+            Directory.Delete(tempRoot, recursive: true);
+        }
+    }
+
     [Fact]
     [RequiresPostgres]
     public async Task StartScan_FolderGalleriesDeduplicateImagesWithinEachFolderAndRemainIdempotent()
