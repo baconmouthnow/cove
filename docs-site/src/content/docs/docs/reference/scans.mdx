@@ -19,9 +19,9 @@ Cove first matches a discovered file by its path. When that directory is inspect
 
 When a file appears at a new path, Cove can use its OShash fingerprint to reconcile it with existing content. OShash combines the file size with samples from the beginning and end of the file, making it a fast identity heuristic rather than a full-file checksum:
 
-- If exactly one matching file's old path is gone, Cove treats the change as a move or rename and repoints that file record.
+- If matching files' old paths are gone and all of those files belong to one media record, Cove treats the change as a move or rename and repoints one of them, preferring a file with the same name. When every copy of a record moves at once, each new path takes one of the record's files.
 - If a matching file still exists, Cove treats the new path as a duplicate file attached to the same media record.
-- If Cove cannot make one confident match, it imports the path as new content.
+- If Cove cannot make one confident match, for example because the missing files belong to two different media records, it imports the path as new content.
 
 Treat large filesystem reorganizations as a controlled operation with a current backup and verify the resulting associations.
 
