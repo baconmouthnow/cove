@@ -1,7 +1,13 @@
 import { useEffect, useEffectEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { auth, database, jobs, metadata, system, stashMigration } from "../api/client";
-import type { StashPreviewResult, StashImportOptions, StashImportResult, StashPathMapping } from "../api/client";
+import type {
+  StashPreviewResult,
+  StashImportOptions,
+  StashImportResult,
+  StashPathMapping,
+  StashExcludePatternReport,
+} from "../api/client";
 import type { CoveConfig, CovePathConfig, JobInfo } from "../api/types";
 import { authStore } from "../auth/authStore";
 import { useAuth } from "../auth/AuthContext";
@@ -1200,6 +1206,7 @@ export function SetupWizardPage({ config, onComplete }: Props) {
                       </div>
                     ))}
                   </div>
+                  <StashExcludePatternNotice patterns={stashResult.unconvertedExcludePatterns ?? []} />
                 </div>
               ) : backupRestoreResult ? (
                 <div className="mb-6 max-w-lg mx-auto text-left">
@@ -1299,6 +1306,42 @@ function formatJobDuration(ms: number): string {
   const hours = Math.floor(minutes / 60);
   const mins = minutes % 60;
   return `${hours}h ${mins.toString().padStart(2, "0")}m`;
+}
+
+// Shown before the first scan, which adds the files these patterns kept out of Stash.
+export function StashExcludePatternNotice({ patterns }: { patterns: StashExcludePatternReport[] }) {
+  if (patterns.length === 0) return null;
+  return (
+    <div className="mt-4 max-w-lg mx-auto flex items-start gap-2 rounded-lg border border-amber-700/50 bg-amber-900/20 p-3 text-left text-sm text-amber-300">
+      <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+      <div>
+        <div className="font-medium">Some Stash exclusions didn't carry over</div>
+        <div className="text-xs text-amber-300/80">
+          Stash uses regular expressions, but Cove only takes plain text or glob patterns, like{" "}
+          <code className="text-amber-200">Extras/**</code> or <code className="text-amber-200">*.tmp</code>. Rewrite
+          each one as a glob in Settings → Library → Scanning & Assets → Scan Rules before you scan. If you don't, the
+          scan will add the files Stash was skipping.
+        </div>
+        <ul className="mt-2 space-y-1.5 text-xs">
+          {patterns.map((item) => (
+            <li key={item.pattern}>
+              <code className="break-all text-amber-200">{item.pattern}</code>{" "}
+              <span className="text-amber-300/70">(Stash skipped {stashSkippedMedia(item.stashLists)})</span>
+              <div className="text-amber-300/80">{item.reason}</div>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+// Stash's `exclude` list skips videos, and its `image_exclude` list skips images and zip galleries.
+function stashSkippedMedia(stashLists: string[]): string {
+  const videos = stashLists.includes("exclude");
+  const images = stashLists.includes("image_exclude");
+  if (videos && images) return "videos, images and galleries";
+  return videos ? "videos" : "images and galleries";
 }
 
 type ProgressSample = { time: number; progress: number };

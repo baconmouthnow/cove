@@ -426,29 +426,41 @@ WHERE files.zip_file_id IS NOT NULL";
     private static string GetImportedBaseFileKey(int parentFolderId, string basename)
         => $"{parentFolderId}|{basename}";
 
-    private async Task ImportStashConfigAsync(StashConfigData stashConfig, CancellationToken ct)
+    /// <returns>The Stash exclude patterns that have no exact Cove pattern.</returns>
+    private async Task<IReadOnlyList<StashExcludePatternReport>> ImportStashConfigAsync(StashConfigData stashConfig, CancellationToken ct)
     {
+        IReadOnlyList<StashExcludePatternReport> unconvertedPatterns = [];
         try
         {
             var dto = _configService.GetConfig();
             var (addedPaths, addedMetadataServers, updatedMetadataServers) = MergeStashConfigIntoCoveConfig(dto, stashConfig);
-            if (addedPaths == 0 && addedMetadataServers == 0 && updatedMetadataServers == 0)
+            (dto, var addedPatterns, unconvertedPatterns) = MergeStashExcludePatterns(dto, stashConfig);
+            foreach (var pattern in unconvertedPatterns)
             {
-                _logger.LogDebug("No Stash config paths or metadata servers required importing");
-                return;
+                _logger.LogWarning("Stash exclude pattern {Pattern} ({StashLists}) was not imported: {Reason}",
+                    pattern.Pattern, string.Join(", ", pattern.StashLists), pattern.Reason);
+            }
+
+            if (addedPaths == 0 && addedMetadataServers == 0 && updatedMetadataServers == 0 && addedPatterns == 0)
+            {
+                _logger.LogDebug("No Stash config paths, metadata servers or exclude patterns required importing");
+                return unconvertedPatterns;
             }
 
             await _configService.SaveConfigAsync(dto);
             _logger.LogInformation(
-                "Imported Stash config additions: {PathCount} library paths, {AddedMetadataServerCount} metadata servers added, {UpdatedMetadataServerCount} metadata servers updated",
+                "Imported Stash config additions: {PathCount} library paths, {AddedMetadataServerCount} metadata servers added, {UpdatedMetadataServerCount} metadata servers updated, {ExcludePatternCount} exclude patterns added",
                 addedPaths,
                 addedMetadataServers,
-                updatedMetadataServers);
+                updatedMetadataServers,
+                addedPatterns);
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Failed to import Stash config");
         }
+
+        return unconvertedPatterns;
     }
 
     private static (int AddedPaths, int AddedMetadataServers, int UpdatedMetadataServers) MergeStashConfigIntoCoveConfig(CoveConfigDto dto, StashConfigData stashConfig)
@@ -518,6 +530,58 @@ WHERE files.zip_file_id IS NOT NULL";
         }
 
         return (addedPaths, addedMetadataServers, updatedMetadataServers);
+    }
+
+    /// <summary>
+    /// Adds the Stash exclude patterns that have an exact Cove pattern. A pattern in both of Stash's lists covers
+    /// every media type Stash scans, so it goes to Exclude patterns. One in <c>image_exclude</c> only goes to the
+    /// image and gallery patterns, as Stash's <c>image_exclude</c> covers both. Cove has no pattern list for videos
+    /// alone, so a pattern in <c>exclude</c> only is reported with the ones that have no Cove pattern. The returned
+    /// configuration gets new lists, because <paramref name="dto"/> shares its lists with the live configuration.
+    /// </summary>
+    private static (CoveConfigDto Config, int AddedPatterns, List<StashExcludePatternReport> Unconverted) MergeStashExcludePatterns(
+        CoveConfigDto dto, StashConfigData stashConfig)
+    {
+        var unconverted = stashConfig.ExcludePatterns
+            .Where(pattern => pattern.CovePattern is null)
+            .GroupBy(pattern => pattern.Regex, StringComparer.Ordinal)
+            .Select(group => new StashExcludePatternReport(group.Key, [.. group.Select(pattern => pattern.StashList).Distinct()], group.First().Reason!))
+            .ToList();
+        var excludePatterns = dto.ExcludePatterns.ToList();
+        var imagePatterns = dto.ExcludeImagePatterns.ToList();
+        var galleryPatterns = dto.ExcludeGalleryPatterns.ToList();
+        var added = 0;
+        // Stash and Cove both match without regard to case, so patterns that differ only in case are one pattern.
+        foreach (var group in stashConfig.ExcludePatterns
+            .Where(pattern => pattern.CovePattern is not null)
+            .GroupBy(pattern => pattern.CovePattern!, StringComparer.OrdinalIgnoreCase))
+        {
+            var videos = group.Any(pattern => pattern.StashList == StashVideoExcludeList);
+            var images = group.Any(pattern => pattern.StashList == StashImageExcludeList);
+            if (videos && images)
+                added += AddPattern(excludePatterns, group.Key);
+            else if (images)
+                added += AddPattern(imagePatterns, group.Key) + AddPattern(galleryPatterns, group.Key);
+            else
+            {
+                unconverted.AddRange(group.Select(pattern => pattern.Regex).Distinct(StringComparer.Ordinal).Select(regex =>
+                    new StashExcludePatternReport(regex, [StashVideoExcludeList], VideosOnlyReason)));
+            }
+        }
+
+        var reports = unconverted
+            .OrderBy(report => stashConfig.ExcludePatterns.FindIndex(pattern => pattern.Regex == report.Pattern))
+            .ToList();
+        return (dto with { ExcludePatterns = excludePatterns, ExcludeImagePatterns = imagePatterns, ExcludeGalleryPatterns = galleryPatterns },
+            added, reports);
+
+        static int AddPattern(List<string> patterns, string pattern)
+        {
+            if (patterns.Contains(pattern, StringComparer.OrdinalIgnoreCase))
+                return 0;
+            patterns.Add(pattern);
+            return 1;
+        }
     }
 
     private async Task ApplyCoveGeneratedPathOverrideAsync(string? coveGeneratedPath, CancellationToken ct)
@@ -813,6 +877,8 @@ WHERE files.zip_file_id IS NOT NULL";
     {
         var paths = new List<(string Path, bool ExcludeImage, bool ExcludeVideo)>();
         var metadataServers = new List<StashMetadataServerConfig>();
+        var excludeEntries = new List<(string Regex, string StashList)>();
+        string? currentExcludeList = null;
         string? generatedPath = null;
         string? videoFileNamingAlgorithm = null;
         string? blobFilesPath = null;
@@ -864,6 +930,35 @@ WHERE files.zip_file_id IS NOT NULL";
                         currentMaxRequestsPerMinute = 240;
                         inStashBoxesArray = false;
                     }
+                }
+
+                if (currentExcludeList != null)
+                {
+                    var item = rawLine.TrimStart();
+                    // A comment, even at the start of a line, doesn't end the list.
+                    if (item.StartsWith('#'))
+                        continue;
+                    if (item.StartsWith('-'))
+                    {
+                        var regex = ReadYamlScalar(item[1..]);
+                        // Stash skips empty patterns too.
+                        if (regex.Trim().Length > 0)
+                            excludeEntries.Add((regex, currentExcludeList));
+                        continue;
+                    }
+
+                    // The list ends at the next top-level key.
+                    if (rawLine.Length > 0 && !char.IsWhiteSpace(rawLine[0]))
+                        currentExcludeList = null;
+                    else
+                        continue;
+                }
+
+                var excludeListMatch = Regex.Match(rawLine, @"^(exclude|image_exclude):\s*(\[\s*\])?\s*$");
+                if (excludeListMatch.Success)
+                {
+                    currentExcludeList = excludeListMatch.Groups[1].Value;
+                    continue;
                 }
 
                 var genMatch = Regex.Match(rawLine, @"^generated:\s*(.+)$");
@@ -1044,15 +1139,19 @@ WHERE files.zip_file_id IS NOT NULL";
         var resolvedGeneratedPath = ResolveConfigDirDefault(
             ResolveStashConfigPath(configDirectory, generatedPath), configDirectory, "generated");
 
+        var libraryPaths = paths
+            .Select(path => (Path: ResolveStashConfigPath(configDirectory, path.Path) ?? path.Path, path.ExcludeImage, path.ExcludeVideo))
+            .ToList();
         return new StashConfigData(
-            paths
-                .Select(path => (ResolveStashConfigPath(configDirectory, path.Path) ?? path.Path, path.ExcludeImage, path.ExcludeVideo))
-                .ToList(),
+            libraryPaths,
             resolvedGeneratedPath,
             videoFileNamingAlgorithm ?? (calculateMd5 == true ? "MD5" : "OSHASH"),
             resolvedBlobFilesPath,
             ResolveStashConfigPath(configDirectory, customPerformerImageLocation),
-            metadataServers);
+            metadataServers,
+            excludeEntries
+                .Select(entry => ReadStashExcludePattern(entry.Regex, entry.StashList, [.. libraryPaths.Select(path => path.Path)]))
+                .ToList());
 
         static bool IsTopLevelSection(string rawLine, params string[] names)
         {
@@ -1062,6 +1161,117 @@ WHERE files.zip_file_id IS NOT NULL";
             var trimmed = rawLine.TrimStart();
             return names.Any(name => trimmed.StartsWith($"{name}:", StringComparison.OrdinalIgnoreCase));
         }
+    }
+
+    private const string StashVideoExcludeList = "exclude";
+    private const string StashImageExcludeList = "image_exclude";
+    private const string RegexMetacharacters = ".^$*+?()[]{}|";
+
+    // Why a Stash exclude pattern was not copied, as the setup wizard shows it under the pattern.
+    private const string RegexReason = "This is a regex. Write it as a glob instead.";
+    private const string GlobCharactersReason = "This looks for a real * or ? in a name, but Cove reads those as wildcards, so a glob can't match it exactly.";
+    private const string OutsideLibraryReason = "This starts with ^ but not with one of your Stash library paths, so Cove can't tell which folder it means. Write it as a glob instead.";
+    private const string VideosOnlyReason = "Cove's patterns skip every file type. To skip only videos, end the glob with a video extension, like Clips/**/*.mp4.";
+
+    /// <summary>
+    /// Reads one Stash exclude regex as a Cove pattern. Stash looks for each regex anywhere in a file's path and
+    /// ignores case, which is how Cove matches a pattern with no <c>*</c> or <c>?</c>, so a regex that is plain text
+    /// becomes that text. Text that is a path inside one of Stash's library folders is marked as a path, so the
+    /// import's path mappings rewrite it like the library paths. A regex anchored to such a path, such as
+    /// <c>^/data/Games/</c>, becomes that path too: Cove finds it anywhere in a path, and it matches the same files
+    /// unless the folder path appears again deeper inside one. Any other regex has no exact Cove pattern.
+    /// </summary>
+    private static StashExcludePattern ReadStashExcludePattern(string regex, string stashList, IReadOnlyList<string> libraryPaths)
+    {
+        if (!TryReadRegexAsText(regex, out var text, out var anchored))
+            return new(regex, stashList, null, false, RegexReason);
+        if (text.Contains('*') || text.Contains('?'))
+            return new(regex, stashList, null, false, GlobCharactersReason);
+        var pattern = NormalizeImportedPath(text);
+        var isLibraryPath = libraryPaths.Any(library => IsWithinStashFolder(pattern, NormalizeImportedPath(library)));
+        if (anchored && !isLibraryPath)
+            return new(regex, stashList, null, false, OutsideLibraryReason);
+        return new(regex, stashList, pattern, isLibraryPath, null);
+    }
+
+    private static bool IsWithinStashFolder(string path, string folder)
+    {
+        var root = folder.TrimEnd('/');
+        return path.TrimEnd('/').Equals(root, StringComparison.OrdinalIgnoreCase)
+            || path.StartsWith(root + "/", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryReadRegexAsText(string regex, out string text, out bool anchored)
+    {
+        text = string.Empty;
+        // Stash adds (?i) itself when a pattern lacks it.
+        var pattern = regex.StartsWith("(?i)", StringComparison.Ordinal) ? regex[4..] : regex;
+        anchored = pattern.StartsWith('^');
+        if (anchored)
+            pattern = pattern[1..];
+        // A trailing .* changes nothing, since the regex may match anywhere in the path.
+        if (pattern.EndsWith(".*$", StringComparison.Ordinal))
+            pattern = pattern[..^3];
+        else if (pattern.EndsWith(".*", StringComparison.Ordinal))
+            pattern = pattern[..^2];
+
+        var builder = new StringBuilder(pattern.Length);
+        for (var index = 0; index < pattern.Length; index++)
+        {
+            var character = pattern[index];
+            if (character == '\\')
+            {
+                // An escaped punctuation mark stands for itself; \d, \w and the like are character classes.
+                if (++index == pattern.Length || char.IsLetterOrDigit(pattern[index]))
+                    return false;
+                builder.Append(pattern[index]);
+            }
+            else if (RegexMetacharacters.Contains(character))
+                return false;
+            else
+                builder.Append(character);
+        }
+
+        text = builder.ToString();
+        return text.Length > 0;
+    }
+
+    /// <summary>Reads one YAML scalar the way Stash writes them in config.yml: plain, 'single-quoted' or "double-quoted".</summary>
+    private static string ReadYamlScalar(string value)
+    {
+        var text = value.Trim();
+        var builder = new StringBuilder(text.Length);
+        if (text.StartsWith('\''))
+        {
+            for (var index = 1; index < text.Length; index++)
+            {
+                if (text[index] != '\'')
+                    builder.Append(text[index]);
+                else if (index + 1 < text.Length && text[index + 1] == '\'')
+                    builder.Append(text[++index]);
+                else
+                    break;
+            }
+            return builder.ToString();
+        }
+
+        if (text.StartsWith('"'))
+        {
+            for (var index = 1; index < text.Length && text[index] != '"'; index++)
+            {
+                if (text[index] == '\\' && index + 1 < text.Length)
+                {
+                    var escaped = text[++index];
+                    builder.Append(escaped switch { 't' => '\t', 'n' => '\n', _ => escaped });
+                }
+                else
+                    builder.Append(text[index]);
+            }
+            return builder.ToString();
+        }
+
+        var comment = text.IndexOf(" #", StringComparison.Ordinal);
+        return comment < 0 ? text : text[..comment].TrimEnd();
     }
 
     // Prefers the path resolved from config.yml, but when that path is unset or does not exist on
