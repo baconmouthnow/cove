@@ -1019,6 +1019,7 @@ stash_boxes:
     }
 
     [Fact]
+    [RequiresPostgres]
     public async Task ImportStashConfig_CopiesExcludePatternsCoveMatchesExactlyAndReportsTheRest()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"stash-config-{Guid.NewGuid():N}");
@@ -1049,7 +1050,8 @@ image_exclude:
 - "(?i)^{library}/Old\\.Sets/"
 - ^Relative/
 """, TestContext.Current.CancellationToken);
-            await using var context = CreateContext();
+            await using var database = await CovePostgresDatabase.CreateAsync(TestContext.Current.CancellationToken);
+            await using var context = await CreateContextAsync(database, includeOwner: false);
             var config = new CoveConfiguration();
             var service = CreateService(context, configuration: config, configPath: Path.Combine(tempDir, "cove-config.json"));
             var mappings = InvokePrivateStatic(typeof(StashMigrationService), "NormalizeStashPathMappings",
