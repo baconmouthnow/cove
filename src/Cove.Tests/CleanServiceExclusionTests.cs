@@ -3,6 +3,7 @@ using Cove.Core.Entities;
 using Cove.Core.Events;
 using Cove.Core.Interfaces;
 using Cove.Data;
+using Cove.Tests.Postgres;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -10,6 +11,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cove.Tests;
 
+[RequiresPostgres]
 public sealed class CleanServiceExclusionTests
 {
     [Fact]
@@ -133,13 +135,15 @@ public sealed class CleanServiceExclusionTests
 
     private sealed class Library : IAsyncDisposable
     {
+        private readonly CovePostgresDatabase _database;
         private readonly ServiceProvider _provider;
 
-        private Library(string root, DbContextOptions<CoveContext> options)
+        private Library(string root, CovePostgresDatabase database)
         {
             Root = root;
-            Options = options;
-            _provider = BuildServices(options, Thumbnails);
+            _database = database;
+            Options = database.CreateOptions();
+            _provider = BuildServices(Options, Thumbnails);
             Config = new CoveConfiguration
             {
                 CovePaths =
@@ -159,14 +163,10 @@ public sealed class CleanServiceExclusionTests
 
         public static async Task<Library> CreateAsync()
         {
+            var database = await CovePostgresDatabase.CreateAsync(TestContext.Current.CancellationToken);
             var root = Path.Combine(Path.GetTempPath(), $"cove-clean-exclusions-{Guid.NewGuid():N}");
             Directory.CreateDirectory(root);
-            var options = new DbContextOptionsBuilder<CoveContext>()
-                .UseSqlite($"Data Source={Path.Combine(root, "library.db")};Pooling=False").Options;
-            var library = new Library(root, options);
-            await using var db = library.Open();
-            await db.Database.EnsureCreatedAsync(TestContext.Current.CancellationToken);
-            return library;
+            return new Library(root, database);
         }
 
         private static ServiceProvider BuildServices(DbContextOptions<CoveContext> options, IThumbnailService thumbnails)
@@ -315,6 +315,7 @@ public sealed class CleanServiceExclusionTests
         public async ValueTask DisposeAsync()
         {
             await _provider.DisposeAsync();
+            await _database.DisposeAsync();
             Directory.Delete(Root, recursive: true);
         }
     }
