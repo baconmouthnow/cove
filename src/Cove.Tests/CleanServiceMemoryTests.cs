@@ -42,7 +42,7 @@ public sealed class CleanServiceMemoryTests
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         if (outcome == "cancel") guard.AfterInspect = cancellation.Cancel;
         var jobs = new CapturingJobs(guard, cancellation.Token);
-        var service = new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CleanService>.Instance);
+        var service = new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), new CoveConfiguration(), NullLogger<CleanService>.Instance);
         service.StartClean(dryRun: outcome == "dry-run");
         if (outcome == "cancel")
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => jobs.Completion);
@@ -103,7 +103,7 @@ public sealed class CleanServiceMemoryTests
             }
             guard.Enabled = true;
             var jobs = new CapturingJobs(guard, TestContext.Current.CancellationToken);
-            new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CleanService>.Instance)
+            new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), new CoveConfiguration(), NullLogger<CleanService>.Instance)
                 .StartClean(paths: scoped ? [selected] : null);
             await jobs.Completion;
             guard.Enabled = false;
@@ -164,7 +164,7 @@ public sealed class CleanServiceMemoryTests
             }
 
             var jobs = new CapturingJobs(new InspectionGuard(), TestContext.Current.CancellationToken);
-            new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CleanService>.Instance).StartClean();
+            new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), new CoveConfiguration(), NullLogger<CleanService>.Instance).StartClean();
             await jobs.Completion;
 
             await using var verify = new CoveContext(options);
@@ -215,7 +215,7 @@ public sealed class CleanServiceMemoryTests
 
             failure.Armed = true;
             var jobs = new CapturingJobs(new InspectionGuard(), TestContext.Current.CancellationToken);
-            new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CleanService>.Instance).StartClean();
+            new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), new CoveConfiguration(), NullLogger<CleanService>.Instance).StartClean();
             await jobs.Completion;
 
             // The page's shared save fails, so its items are removed one at a time. The failed item stays for
@@ -320,7 +320,7 @@ public sealed class CleanServiceMemoryTests
 
         counter.Enabled = true;
         var jobs = new CapturingJobs(new InspectionGuard(), TestContext.Current.CancellationToken);
-        new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), NullLogger<CleanService>.Instance).StartClean();
+        new CleanService(jobs, provider.GetRequiredService<IServiceScopeFactory>(), new CoveConfiguration(), NullLogger<CleanService>.Instance).StartClean();
         await jobs.Completion;
         counter.Enabled = false;
 
