@@ -2005,6 +2005,17 @@ INSERT INTO scenes_galleries (scene_id, gallery_id) VALUES
     }
 
     [Fact]
+    public async Task TryDeleteFile_RemovesADatabaseThatPooledConnectionsOpened()
+    {
+        // CreateSqliteDatabaseAsync leaves its connection in the pool, and that connection keeps the file open.
+        var dbPath = await CreateSqliteDatabaseAsync("CREATE TABLE scenes (id INTEGER PRIMARY KEY);", "cove-pooled-delete");
+
+        TryDeleteFile(dbPath);
+
+        Assert.False(File.Exists(dbPath));
+    }
+
+    [Fact]
     [RequiresPostgres]
     public async Task CopyGeneratedContentAsync_SkipsScreenshotForExplicitCoverAndRetainsLegacyFallback()
     {
@@ -2787,6 +2798,9 @@ INSERT INTO files_fingerprints SELECT id,'md5','fingerprint-'||id FROM scenes;
 
     private static void TryDeleteFile(string path)
     {
+        // Microsoft.Data.Sqlite pools connections, and a pooled connection keeps its database file open, which on
+        // Windows makes the delete fail. Clearing the pools closes those connections so the delete can succeed.
+        SqliteConnection.ClearAllPools();
         try
         {
             if (File.Exists(path))
