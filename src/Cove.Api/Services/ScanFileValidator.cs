@@ -604,7 +604,8 @@ public sealed class ScanFileValidator(
             // digits. Once complete movie metadata and media data are in hand, a header whose type is no
             // top-level box type is that tail rather than the start of a real box, so its "size" means nothing.
             // A real top-level box cut short keeps the strict check, as do fragmented files.
-            if (hasCompleteUnfragmentedMovie && !IsTopLevelBoxType(header.AsSpan(4, 4)))
+            if (hasCompleteUnfragmentedMovie
+                && !IsoBmffTopLevelBoxTypes.Contains(System.Text.Encoding.ASCII.GetString(header, 4, 4), StringComparer.Ordinal))
                 return null;
 
             var size32 = BinaryPrimitives.ReadUInt32BigEndian(header.AsSpan(0, 4));
@@ -644,16 +645,6 @@ public sealed class ScanFileValidator(
         }
 
         return boxes == 0 ? "the ISO media container has no boxes" : null;
-    }
-
-    private static bool IsTopLevelBoxType(ReadOnlySpan<byte> type)
-    {
-        foreach (var known in IsoBmffTopLevelBoxTypes)
-        {
-            if (System.Text.Ascii.Equals(type, known))
-                return true;
-        }
-        return false;
     }
 
     private static async Task<string?> ValidateRiffLengthAsync(string path, CancellationToken ct)
