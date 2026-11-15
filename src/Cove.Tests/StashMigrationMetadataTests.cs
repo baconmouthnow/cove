@@ -2803,8 +2803,8 @@ INSERT INTO files_fingerprints SELECT id,'md5','fingerprint-'||id FROM scenes;
 
     private static void TryDeleteFile(string path)
     {
-        // Microsoft.Data.Sqlite pools connections, and a pooled connection keeps its database file open. On
-        // Windows the delete then fails, and the swallowed error left the database in the temp folder.
+        // Microsoft.Data.Sqlite pools connections, and a pooled connection keeps its database file open, which on
+        // Windows makes the delete fail. Clearing the pools closes those connections so the delete can succeed.
         SqliteConnection.ClearAllPools();
         try
         {
