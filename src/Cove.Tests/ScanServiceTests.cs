@@ -294,7 +294,52 @@ public class ScanServiceTests
     [InlineData("ftyp moov moof mdat")]
     public async Task ValidateDeclaredContainerLengthAsync_RejectsNonBoxTailWithoutCompleteUnfragmentedMovie(string layout)
     {
-        var failure = await ValidateIsoBoxesWithTailAsync(layout, TrailingJunk);
+        Assert.Contains("shorter than a declared box", await ValidateIsoBoxesWithTailAsync(layout, TrailingJunk));
+        Assert.Contains("shorter than a declared box", await ValidateIsoBoxesWithTailAsync(layout, DigitTail(80)));
+    }
+
+    // Some files end in a run of ASCII digits after the last box. Read as a box header, the digits declare
+    // a size far past the end of the file and a type of four printable characters.
+    private static byte[] DigitTail(int length) =>
+        Enumerable.Range(0, length).Select(i => (byte)('0' + (i * 7 + 3) % 10)).ToArray();
+
+    [Theory]
+    [InlineData("ftyp moov free mdat", 80)]
+    [InlineData("ftyp free mdat moov", 125)]
+    [InlineData("ftyp moov mdat64", 30)]
+    public async Task ValidateDeclaredContainerLengthAsync_AcceptsDigitTailAfterCompleteMovieAndMediaData(string layout, int tailLength)
+    {
+        var failure = await ValidateIsoBoxesWithTailAsync(layout, DigitTail(tailLength));
+
+        Assert.Null(failure);
+    }
+
+    [Theory]
+    // Letters and digits mixed in the type bytes.
+    [InlineData("4096a7Kq20251114x9")]
+    // Letters and punctuation in the type bytes.
+    [InlineData("5521id=k;v2.0")]
+    // Begins with a box type, but in the size bytes: the type bytes are digits.
+    [InlineData("free48213906475")]
+    // Four letters that are no top-level box type.
+    [InlineData("8834abcdefgh")]
+    public async Task ValidateDeclaredContainerLengthAsync_AcceptsTextTailAfterCompleteMovieAndMediaData(string tail)
+    {
+        var failure = await ValidateIsoBoxesWithTailAsync("ftyp moov mdat", System.Text.Encoding.ASCII.GetBytes(tail));
+
+        Assert.Null(failure);
+    }
+
+    [Theory]
+    [InlineData("6718mdat20251114")]
+    [InlineData("6718moov20251114")]
+    [InlineData("6718udta20251114")]
+    [InlineData("6718uuid20251114")]
+    public async Task ValidateDeclaredContainerLengthAsync_RejectsTextTailWhoseTypeIsATopLevelBoxType(string tail)
+    {
+        // A tail whose type bytes spell a top-level box type reads exactly like that box cut short, so the
+        // cut is reported.
+        var failure = await ValidateIsoBoxesWithTailAsync("ftyp moov mdat", System.Text.Encoding.ASCII.GetBytes(tail));
 
         Assert.Contains("shorter than a declared box", failure);
     }
