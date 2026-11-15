@@ -550,6 +550,12 @@ public sealed class ScanFileValidator(
     private static readonly string[] IsoBmffLeadingBoxTypes =
         ["ftyp", "styp", "moov", "mdat", "moof", "free", "skip", "wide", "pnot", "pdin", "uuid", "sidx"];
 
+    // Box types that ISO/IEC 14496-12 or QuickTime place at the top level of a file, plus udta, which some
+    // writers also put there. After complete movie metadata and media data, a header of any other type is
+    // not the start of a real box.
+    private static readonly string[] IsoBmffTopLevelBoxTypes =
+        [.. IsoBmffLeadingBoxTypes, "etyp", "mfra", "imda", "meta", "meco", "ssix", "prft", "udta"];
+
     private static async Task<string?> ValidateIsoBmffLengthAsync(string path, CancellationToken ct)
     {
         await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 4096, useAsync: true);
@@ -594,11 +600,12 @@ public sealed class ScanFileValidator(
 
             stream.Position = offset;
             await stream.ReadExactlyAsync(header.AsMemory(0, 8), ct);
-            // Some exports also append a longer run of non-box bytes after the last box. Once complete movie
-            // metadata and media data are in hand, a header whose type is not printable ASCII is that tail
-            // rather than the start of a real box, so its "size" means nothing. A real trailing box cut short
-            // keeps the strict check, as do fragmented files.
-            if (hasCompleteUnfragmentedMovie && !IsPrintableBoxType(header.AsSpan(4, 4)))
+            // Some exports also append a longer run of non-box bytes after the last box, such as a run of ASCII
+            // digits. Once complete movie metadata and media data are in hand, a header whose type is no
+            // top-level box type is that tail rather than the start of a real box, so its "size" means nothing.
+            // A real top-level box cut short keeps the strict check, as do fragmented files.
+            if (hasCompleteUnfragmentedMovie
+                && !IsoBmffTopLevelBoxTypes.Contains(System.Text.Encoding.ASCII.GetString(header, 4, 4), StringComparer.Ordinal))
                 return null;
 
             var size32 = BinaryPrimitives.ReadUInt32BigEndian(header.AsSpan(0, 4));
@@ -639,9 +646,6 @@ public sealed class ScanFileValidator(
 
         return boxes == 0 ? "the ISO media container has no boxes" : null;
     }
-
-    private static bool IsPrintableBoxType(ReadOnlySpan<byte> type) =>
-        type.IndexOfAnyExceptInRange((byte)0x20, (byte)0x7e) < 0;
 
     private static async Task<string?> ValidateRiffLengthAsync(string path, CancellationToken ct)
     {
