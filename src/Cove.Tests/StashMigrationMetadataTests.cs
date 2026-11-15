@@ -2005,6 +2005,22 @@ INSERT INTO scenes_galleries (scene_id, gallery_id) VALUES
     }
 
     [Fact]
+    public async Task TryDeleteFile_RemovesADatabaseThatPooledConnectionsOpened()
+    {
+        var dbPath = await CreateSqliteDatabaseAsync("CREATE TABLE scenes (id INTEGER PRIMARY KEY);", "cove-pooled-delete");
+        // The import reads the Stash database through a read-only connection like this one.
+        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString()))
+        {
+            await connection.OpenAsync(TestContext.Current.CancellationToken);
+            await ExecuteSqlAsync(connection, "SELECT COUNT(*) FROM scenes;");
+        }
+
+        TryDeleteFile(dbPath);
+
+        Assert.False(File.Exists(dbPath));
+    }
+
+    [Fact]
     [RequiresPostgres]
     public async Task CopyGeneratedContentAsync_SkipsScreenshotForExplicitCoverAndRetainsLegacyFallback()
     {
@@ -2787,6 +2803,9 @@ INSERT INTO files_fingerprints SELECT id,'md5','fingerprint-'||id FROM scenes;
 
     private static void TryDeleteFile(string path)
     {
+        // Microsoft.Data.Sqlite pools connections, and a pooled connection keeps its database file open. On
+        // Windows the delete then fails, and the swallowed error left the database in the temp folder.
+        SqliteConnection.ClearAllPools();
         try
         {
             if (File.Exists(path))
