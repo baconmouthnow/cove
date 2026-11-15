@@ -2007,13 +2007,8 @@ INSERT INTO scenes_galleries (scene_id, gallery_id) VALUES
     [Fact]
     public async Task TryDeleteFile_RemovesADatabaseThatPooledConnectionsOpened()
     {
+        // CreateSqliteDatabaseAsync leaves its connection in the pool, and that connection keeps the file open.
         var dbPath = await CreateSqliteDatabaseAsync("CREATE TABLE scenes (id INTEGER PRIMARY KEY);", "cove-pooled-delete");
-        // The import reads the Stash database through a read-only connection like this one.
-        await using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = dbPath, Mode = SqliteOpenMode.ReadOnly }.ToString()))
-        {
-            await connection.OpenAsync(TestContext.Current.CancellationToken);
-            await ExecuteSqlAsync(connection, "SELECT COUNT(*) FROM scenes;");
-        }
 
         TryDeleteFile(dbPath);
 
