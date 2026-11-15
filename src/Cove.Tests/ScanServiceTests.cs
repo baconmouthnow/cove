@@ -289,13 +289,17 @@ public class ScanServiceTests
     }
 
     [Theory]
-    [InlineData("ftyp mdat")]
-    [InlineData("ftyp moov")]
-    [InlineData("ftyp moov moof mdat")]
-    public async Task ValidateDeclaredContainerLengthAsync_RejectsNonBoxTailWithoutCompleteUnfragmentedMovie(string layout)
+    [InlineData("ftyp mdat", false)]
+    [InlineData("ftyp moov", false)]
+    [InlineData("ftyp moov moof mdat", false)]
+    [InlineData("ftyp mdat", true)]
+    [InlineData("ftyp moov", true)]
+    [InlineData("ftyp moov moof mdat", true)]
+    public async Task ValidateDeclaredContainerLengthAsync_RejectsNonBoxTailWithoutCompleteUnfragmentedMovie(string layout, bool digitTail)
     {
-        Assert.Contains("shorter than a declared box", await ValidateIsoBoxesWithTailAsync(layout, TrailingJunk));
-        Assert.Contains("shorter than a declared box", await ValidateIsoBoxesWithTailAsync(layout, DigitTail(80)));
+        var failure = await ValidateIsoBoxesWithTailAsync(layout, digitTail ? DigitTail(80) : TrailingJunk);
+
+        Assert.Contains("shorter than a declared box", failure);
     }
 
     // Some files end in a run of ASCII digits after the last box. Read as a box header, the digits declare
