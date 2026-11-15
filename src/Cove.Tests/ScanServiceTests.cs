@@ -331,26 +331,15 @@ public class ScanServiceTests
     }
 
     [Theory]
-    [InlineData("6718mdat20251114")]
-    [InlineData("6718moov20251114")]
-    [InlineData("6718udta20251114")]
-    [InlineData("6718uuid20251114")]
-    public async Task ValidateDeclaredContainerLengthAsync_RejectsTextTailWhoseTypeIsATopLevelBoxType(string tail)
-    {
-        // A tail whose type bytes spell a top-level box type reads exactly like that box cut short, so the
-        // cut is reported.
-        var failure = await ValidateIsoBoxesWithTailAsync("ftyp moov mdat", System.Text.Encoding.ASCII.GetBytes(tail));
-
-        Assert.Contains("shorter than a declared box", failure);
-    }
-
-    [Theory]
     [InlineData("udta")]
     [InlineData("mdat")]
+    [InlineData("moov")]
+    [InlineData("uuid")]
     public async Task ValidateDeclaredContainerLengthAsync_RejectsTruncatedNamedBoxAfterCompleteMovieAndMediaData(string type)
     {
         // A copy cut inside a later real box, such as trailing user data or a second media data box: its
-        // header is a real box header, so the cut is reported.
+        // header is a real box header, so the cut is reported. A tail whose type bytes happen to spell one
+        // of these types reads the same way.
         byte[] tail = [0, 0, 0, 64, .. System.Text.Encoding.ASCII.GetBytes(type), 1, 2, 3, 4];
 
         var failure = await ValidateIsoBoxesWithTailAsync("ftyp mdat moov", tail);
